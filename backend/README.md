@@ -49,9 +49,14 @@ New market endpoints:
 
 ## Hourly Market Refresh
 
-The backend now runs a cron-like hourly scheduler when the FastAPI app starts.
+The backend supports two hourly refresh modes:
 
-It refreshes and persists live quotes for the full tracked symbol universe:
+- Celery + Redis worker/beat scheduling
+- the existing in-process FastAPI fallback loop
+
+When `NIRVESTA_USE_CELERY_SCHEDULER=true`, Celery beat dispatches an hourly refresh task through Redis and the API stops creating the in-process loop.
+
+It refreshes and persists live quotes for the full tracked symbol universe, including every tracked ETF price:
 
 - every symbol in `NIRVESTA_MARKET_SYMBOLS`
 - every symbol from `backend/data/portfolio_holdings.json` after CSV upload
@@ -59,6 +64,36 @@ It refreshes and persists live quotes for the full tracked symbol universe:
 The persisted hourly snapshot is written to:
 
 - `backend/data/market_snapshot.json`
+
+### Run Celery With Redis
+
+Start Redis locally, then run:
+
+```bash
+cd backend
+uv sync
+uv run celery -A app.celery_app:celery_app worker --loglevel=info
+```
+
+In a second terminal, run Celery beat:
+
+```bash
+cd backend
+uv run celery -A app.celery_app:celery_app beat --loglevel=info
+```
+
+Then run the FastAPI API normally:
+
+```bash
+cd backend
+uv run uvicorn app.main:app --reload
+```
+
+If you prefer the old in-process scheduler, set:
+
+```bash
+NIRVESTA_USE_CELERY_SCHEDULER=false
+```
 
 ## Upload CSV Holdings
 

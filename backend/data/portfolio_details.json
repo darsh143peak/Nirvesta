@@ -1,0 +1,58 @@
+[
+  {
+    "symbol": "GOLDBEES",
+    "quantity": 60.0,
+    "average_price": 112.1,
+    "company_name": "Nippon India ETF Gold BeES",
+    "broker": "Zerodha"
+  },
+  {
+    "symbol": "HDFCBANK",
+    "quantity": 18.0,
+    "average_price": 1638.1,
+    "company_name": "HDFC Bank Limited",
+    "broker": "Zerodha"
+  },
+  {
+    "symbol": "INFY",
+    "quantity": 12.0,
+    "average_price": 1452.3499999999997,
+    "company_name": "Infosys Limited",
+    "broker": "Zerodha"
+  },
+  {
+    "symbol": "ITC",
+    "quantity": 150.0,
+    "average_price": 438.65,
+    "company_name": "ITC Limited",
+    "broker": "Zerodha"
+  },
+  {
+    "symbol": "MID150BEES",
+    "quantity": 35.0,
+    "average_price": 201.75,
+    "company_name": "Nippon India ETF Nifty Midcap 150",
+    "broker": "Zerodha"
+  },
+  {
+    "symbol": "NIFTYBEES",
+    "quantity": 80.0,
+    "average_price": 248.3,
+    "company_name": "Nippon India ETF Nifty 50 BeES",
+    "broker": "Zerodha"
+  },
+  {
+    "symbol": "RELIANCE",
+    "quantity": 8.0,
+    "average_price": 1362.4,
+    "company_name": "Reliance Industries Limited",
+    "broker": "Zerodha"
+  },
+  {
+    "symbol": "SBIN",
+    "quantity": 25.0,
+    "average_price": 742.8,
+    "company_name": "State Bank of India",
+    "broker": "Zerodha"
+  }
+]

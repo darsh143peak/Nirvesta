@@ -12,6 +12,13 @@ type AuditHolding = {
   volatility_impact: number;
   market_value: string;
   performance: string;
+  average_buy_price?: string | null;
+  current_price?: string | null;
+  break_even_price?: string | null;
+  unrealized_profit?: string | null;
+  estimated_brokerage?: string | null;
+  safe_to_sell: boolean;
+  sell_signal: string;
 };
 
 type AuditorResponse = {
@@ -226,6 +233,16 @@ export function PortfolioAuditorPage() {
                         <p className={`font-bold ${holding.performance.startsWith("-") ? "text-error" : "text-tertiary"}`}>{holding.performance}</p>
                       </div>
                     </div>
+                    <div className="grid gap-3 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm">
+                      <MetricRow label="Buy Price" value={holding.average_buy_price ?? "No data available"} />
+                      <MetricRow label="Current Price" value={holding.current_price ?? "No data available"} />
+                      <MetricRow label="Break-even" value={holding.break_even_price ?? "No data available"} />
+                      <MetricRow label="Profit / Loss" value={holding.unrealized_profit ?? "No data available"} />
+                      <MetricRow label="Est. Brokerage" value={holding.estimated_brokerage ?? "No data available"} />
+                    </div>
+                    <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-medium ${holding.safe_to_sell ? "border-tertiary/20 bg-tertiary/10 text-tertiary" : "border-error/20 bg-error/10 text-error"}`}>
+                      {holding.sell_signal}
+                    </div>
                   </Panel>
                 ))}
               </div>
@@ -290,6 +307,15 @@ function NoDataState(props: { message: string }) {
   return (
     <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-white/[0.03] p-6 text-sm text-on-surface-variant">
       {props.message}
+    </div>
+  );
+}
+
+function MetricRow(props: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">{props.label}</span>
+      <span className="text-right font-semibold text-white">{props.value}</span>
     </div>
   );
 }

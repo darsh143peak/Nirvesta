@@ -41,6 +41,7 @@ class UploadPortfolioResponse(BaseModel):
     holdings_detected: int
     symbols: list[str]
     persistence_path: str
+    details_path: str | None = None
     notes: list[str]
 
 
@@ -51,6 +52,7 @@ class BatchUploadPortfolioResponse(BaseModel):
     holdings_detected: int
     symbols: list[str]
     persistence_path: str
+    details_path: str | None = None
     notes: list[str]
 
 
@@ -138,6 +140,13 @@ class AuditHolding(BaseModel):
     volatility_impact: int
     market_value: str
     performance: str
+    average_buy_price: str | None = None
+    current_price: str | None = None
+    break_even_price: str | None = None
+    unrealized_profit: str | None = None
+    estimated_brokerage: str | None = None
+    safe_to_sell: bool = False
+    sell_signal: str = "No data available"
 
 
 class AuditRecommendation(BaseModel):

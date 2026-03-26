@@ -24,9 +24,9 @@ async def _market_refresh_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Prime the snapshot immediately, then keep it fresh on a cron-like hourly interval.
+    # Prime the snapshot immediately, then keep it fresh either via Celery beat or the in-process fallback loop.
     initial_refresh = asyncio.create_task(asyncio.to_thread(refresh_market_snapshot))
-    scheduler_task = asyncio.create_task(_market_refresh_loop())
+    scheduler_task = None if settings.use_celery_scheduler else asyncio.create_task(_market_refresh_loop())
     try:
         await initial_refresh
     except Exception:  # pragma: no cover - app should still boot if initial refresh fails
@@ -34,9 +34,10 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        scheduler_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await scheduler_task
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await scheduler_task
 
 app = FastAPI(
     title=settings.app_name,

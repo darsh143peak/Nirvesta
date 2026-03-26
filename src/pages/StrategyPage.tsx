@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { AppShell } from "../components/chrome";
 import { MaterialIcon } from "../components/MaterialIcon";
@@ -28,6 +28,7 @@ type StrategySimulationResponse = {
 };
 
 type EditableGoal = {
+  id: string;
   goal_name: string;
   target_amount: string;
   target_year: string;
@@ -41,6 +42,7 @@ type StrategyChatMessage = {
 };
 
 type StoredStrategyGoal = {
+  id?: string;
   goal_name?: string;
   target_amount?: number;
   target_year?: number;
@@ -50,11 +52,13 @@ type StoredStrategyGoal = {
 
 export function StrategyPage() {
   const { profile, user, updateProfile, refreshProfile } = useAuth();
+  const goalsStorageKey = useMemo(() => `nirvesta:strategy-goals:${user?.id ?? "guest"}`, [user?.id]);
   const [riskMode, setRiskMode] = useState<RiskMode>(toRiskMode(profile?.risk_attitude));
   const [monthlySurplus, setMonthlySurplus] = useState<number>(profile?.monthly_investable_surplus ?? 0);
   const [expense, setExpense] = useState(0);
   const [pauseMonths, setPauseMonths] = useState(0);
-  const [goal, setGoal] = useState<EditableGoal>(createInitialGoal(profile?.primary_goal, profile?.time_horizon_years, null));
+  const [goals, setGoals] = useState<EditableGoal[]>([]);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [messages, setMessages] = useState<StrategyChatMessage[]>([
     {
@@ -75,9 +79,18 @@ export function StrategyPage() {
   }, [profile?.monthly_investable_surplus, profile?.risk_attitude]);
 
   useEffect(() => {
-    const storedGoal = getStoredGoalFromUserMetadata(user?.user_metadata?.strategy_goal);
-    setGoal(createInitialGoal(profile?.primary_goal, profile?.time_horizon_years, storedGoal));
-  }, [profile?.primary_goal, profile?.time_horizon_years, user?.user_metadata]);
+    const storedGoals = getStoredGoalsFromUserMetadata(
+      user?.user_metadata?.strategy_goals,
+      user?.user_metadata?.strategy_goal,
+      loadStoredGoalsFromLocalStorage(goalsStorageKey),
+    );
+    const nextGoals =
+      storedGoals.length > 0
+        ? storedGoals.map((storedGoal) => createInitialGoal(profile?.primary_goal, profile?.time_horizon_years, storedGoal))
+        : [createInitialGoal(profile?.primary_goal, profile?.time_horizon_years, null)];
+    setGoals(nextGoals);
+    setSelectedGoalId((current) => (current && nextGoals.some((goal) => goal.id === current) ? current : nextGoals[0]?.id ?? null));
+  }, [goalsStorageKey, profile?.primary_goal, profile?.time_horizon_years, user?.user_metadata]);
 
   useEffect(() => {
     let cancelled = false;
@@ -137,15 +150,19 @@ export function StrategyPage() {
     };
   }, [expense, monthlySurplus, pauseMonths, riskMode]);
 
-  const goalValidation = useMemo(() => validateGoal(goal), [goal]);
-  const hasGoal = Boolean(goal.goal_name.trim() && Number(goal.target_amount) > 0 && Number(goal.target_year) >= new Date().getFullYear());
+  const selectedGoal = useMemo(
+    () => goals.find((goal) => goal.id === selectedGoalId) ?? goals[0] ?? blankGoal(),
+    [goals, selectedGoalId],
+  );
+  const goalValidation = useMemo(() => validateGoal(selectedGoal), [selectedGoal]);
+  const hasGoal = Boolean(selectedGoal.goal_name.trim() && Number(selectedGoal.target_amount) > 0 && Number(selectedGoal.target_year) >= new Date().getFullYear());
   const projectedGoalCard = useMemo(
-    () => (hasGoal ? buildProjectedGoalCard(goal, monthlySurplus, expense, pauseMonths, strategy?.milestones ?? []) : null),
-    [expense, goal, hasGoal, monthlySurplus, pauseMonths, strategy?.milestones],
+    () => (hasGoal ? buildProjectedGoalCard(selectedGoal, monthlySurplus, expense, pauseMonths, strategy?.milestones ?? []) : null),
+    [expense, selectedGoal, hasGoal, monthlySurplus, pauseMonths, strategy?.milestones],
   );
   const suggestedQuestions = useMemo(
-    () => buildSuggestedQuestions(goal, monthlySurplus, expense),
-    [goal, monthlySurplus, expense],
+    () => buildSuggestedQuestions(selectedGoal, monthlySurplus, expense),
+    [selectedGoal, monthlySurplus, expense],
   );
 
   function submitScenario(question: string) {
@@ -165,7 +182,7 @@ export function StrategyPage() {
           expense,
           pauseMonths,
           strategy,
-          goal,
+          goal: selectedGoal,
         }),
       },
     ]);
@@ -177,11 +194,24 @@ export function StrategyPage() {
     submitScenario(chatInput);
   }
 
-  async function handleSaveGoal() {
-    setGoalSaveMessage(null);
+  function toStoredGoal(goal: EditableGoal): StoredStrategyGoal {
+    return {
+      id: goal.id,
+      goal_name: goal.goal_name.trim(),
+      target_amount: Number(goal.target_amount),
+      target_year: Number(goal.target_year),
+      icon: goal.icon.trim() || "flag",
+      status: goal.status.trim() || "building",
+    };
+  }
 
-    if (goalValidation) {
-      setGoalError(goalValidation);
+  async function handleSaveGoal(goalId = selectedGoal.id) {
+    setGoalSaveMessage(null);
+    const goalToSave = goals.find((goal) => goal.id === goalId) ?? selectedGoal;
+    const validationError = validateGoal(goalToSave);
+
+    if (validationError) {
+      setGoalError(validationError);
       return;
     }
 
@@ -192,8 +222,8 @@ export function StrategyPage() {
       const profileResult = await updateProfile({
         monthly_investable_surplus: monthlySurplus,
         risk_attitude: capitalize(riskMode),
-        primary_goal: goal.goal_name.trim(),
-        time_horizon_years: Math.max(Number(goal.target_year) - new Date().getFullYear(), 1),
+        primary_goal: goalToSave.goal_name.trim(),
+        time_horizon_years: Math.max(Number(goalToSave.target_year) - new Date().getFullYear(), 1),
       });
 
       if (profileResult.error) {
@@ -204,13 +234,7 @@ export function StrategyPage() {
       if (supabase && hasSupabaseEnv) {
         const { error } = await supabase.auth.updateUser({
           data: {
-            strategy_goal: {
-              goal_name: goal.goal_name.trim(),
-              target_amount: Number(goal.target_amount),
-              target_year: Number(goal.target_year),
-              icon: goal.icon.trim() || "flag",
-              status: goal.status.trim() || "building",
-            },
+            strategy_goals: goals.map((goal) => toStoredGoal(goal.id === goalToSave.id ? goalToSave : goal)),
           },
         });
 
@@ -220,25 +244,35 @@ export function StrategyPage() {
         }
       }
 
+      persistGoalsToLocalStorage(
+        goalsStorageKey,
+        goals.map((goal) => toStoredGoal(goal.id === goalToSave.id ? goalToSave : goal)),
+      );
+
       if (user?.id) {
         await refreshProfile(user.id);
       }
 
-      setGoalSaveMessage("Goal saved successfully. We now persist the strategy goal against your existing user/profile records.");
+      setGoalSaveMessage(`Saved ${goalToSave.goal_name || "goal"} successfully. Your other goal cards stay stored too.`);
     } finally {
       setSavingGoal(false);
     }
   }
 
-  async function handleDeleteGoal() {
+  async function handleDeleteGoal(goalId = selectedGoal.id) {
     setGoalError(null);
     setGoalSaveMessage(null);
     setSavingGoal(true);
+    const goalToDelete = goals.find((goal) => goal.id === goalId) ?? selectedGoal;
+    const remainingGoals = goals.filter((goal) => goal.id !== goalToDelete.id);
 
     try {
       const profileResult = await updateProfile({
-        primary_goal: null,
-        time_horizon_years: null,
+        primary_goal: remainingGoals.length > 0 ? remainingGoals[0]?.goal_name ?? null : null,
+        time_horizon_years:
+          remainingGoals.length > 0
+            ? Math.max(Number(remainingGoals[0]?.target_year ?? new Date().getFullYear()) - new Date().getFullYear(), 1)
+            : null,
       });
 
       if (profileResult.error) {
@@ -249,7 +283,7 @@ export function StrategyPage() {
       if (supabase && hasSupabaseEnv) {
         const { error } = await supabase.auth.updateUser({
           data: {
-            strategy_goal: null,
+            strategy_goals: remainingGoals.map((goal) => toStoredGoal(goal)),
           },
         });
 
@@ -259,18 +293,25 @@ export function StrategyPage() {
         }
       }
 
-      setGoal(blankGoal());
+      persistGoalsToLocalStorage(
+        goalsStorageKey,
+        remainingGoals.map((goal) => toStoredGoal(goal)),
+      );
+      setGoals(remainingGoals.length > 0 ? remainingGoals : [blankGoal()]);
+      setSelectedGoalId(remainingGoals[0]?.id ?? null);
       if (user?.id) {
         await refreshProfile(user.id);
       }
-      setGoalSaveMessage("Goal removed successfully.");
+      setGoalSaveMessage(`Removed ${goalToDelete.goal_name || "goal"} successfully.`);
     } finally {
       setSavingGoal(false);
     }
   }
 
   function handleNewGoal() {
-    setGoal(createInitialGoal(profile?.primary_goal, profile?.time_horizon_years, null));
+    const newGoal = blankGoal();
+    setGoals((current) => [...current, newGoal]);
+    setSelectedGoalId(newGoal.id);
     setGoalError(null);
     setGoalSaveMessage(null);
   }
@@ -288,7 +329,7 @@ export function StrategyPage() {
           onClick={() => void handleSaveGoal()}
           className="rounded-2xl bg-white px-5 py-2 text-sm font-bold text-on-primary transition hover:scale-95"
         >
-          Save Goal
+          Save Active Goal
         </button>
       }
     >
@@ -297,7 +338,7 @@ export function StrategyPage() {
           <div>
             <h1 className="text-5xl font-black tracking-[-0.05em] text-white md:text-7xl">Master Strategy</h1>
             <p className="mt-4 max-w-2xl text-lg text-on-surface-variant">
-              Your strategy page now uses the schema you already have. One goal is edited at a time, saved against your current Supabase user/profile, and reflected in the live projections.
+              Your strategy page now supports multiple stored goals. Each goal gets its own card, saves separately, and can be used as the active projection without replacing the others.
             </p>
           </div>
           <div className="flex items-center gap-2 rounded-2xl bg-surface-container p-2">
@@ -382,62 +423,147 @@ export function StrategyPage() {
                 <div>
                   <h3 className="text-xl font-bold text-white">Goal Planner</h3>
                   <p className="mt-1 text-sm text-on-surface-variant">
-                    One goal at a time, aligned to your current schema. No missing-table dependency.
+                    Create as many goal cards as you want. Each one stays stored separately in your account instead of being overwritten by the next save.
                   </p>
                 </div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Goal Name">
-                  <input
-                    type="text"
-                    value={goal.goal_name}
-                    onChange={(event) => setGoal((current) => ({ ...current, goal_name: event.target.value }))}
-                    className="w-full rounded-2xl border border-white/10 bg-surface-container-high px-4 py-3 text-white outline-none"
-                  />
-                </Field>
-                <Field label="Target Amount">
-                  <input
-                    type="number"
-                    min={1}
-                    value={goal.target_amount}
-                    onChange={(event) => setGoal((current) => ({ ...current, target_amount: event.target.value }))}
-                    className="w-full rounded-2xl border border-white/10 bg-surface-container-high px-4 py-3 text-white outline-none"
-                  />
-                </Field>
-                <Field label="Target Year">
-                  <input
-                    type="number"
-                    min={new Date().getFullYear()}
-                    max={2100}
-                    value={goal.target_year}
-                    onChange={(event) => setGoal((current) => ({ ...current, target_year: event.target.value }))}
-                    className="w-full rounded-2xl border border-white/10 bg-surface-container-high px-4 py-3 text-white outline-none"
-                  />
-                </Field>
-                <Field label="Status">
-                  <select
-                    value={goal.status}
-                    onChange={(event) => setGoal((current) => ({ ...current, status: event.target.value }))}
-                    className="w-full rounded-2xl border border-white/10 bg-surface-container-high px-4 py-3 text-white outline-none"
-                  >
-                    <option value="seeded">Seeded</option>
-                    <option value="building">Building</option>
-                    <option value="on_track">On Track</option>
-                    <option value="delayed">Delayed</option>
-                  </select>
-                </Field>
-                <Field label="Icon">
-                  <input
-                    type="text"
-                    value={goal.icon}
-                    onChange={(event) => setGoal((current) => ({ ...current, icon: event.target.value }))}
-                    className="w-full rounded-2xl border border-white/10 bg-surface-container-high px-4 py-3 text-white outline-none"
-                  />
-                </Field>
-                <div className="flex items-end text-xs text-on-surface-variant">
-                  This goal is saved through your existing profile and auth metadata instead of a separate table.
-                </div>
+              <div className="space-y-4">
+                {goals.map((goalItem, index) => {
+                  const isActive = goalItem.id === selectedGoal.id;
+                  const cardLabel = goalItem.goal_name || `Untitled Goal ${index + 1}`;
+                  return (
+                    <div
+                      key={goalItem.id}
+                      className={`relative overflow-hidden rounded-[1.9rem] border p-6 shadow-[0_18px_50px_rgba(0,0,0,0.28)] transition ${
+                        isActive
+                          ? "border-[#f7dd8f]/60 bg-[radial-gradient(circle_at_top_left,_rgba(255,244,197,0.45),_transparent_38%),linear-gradient(135deg,_#70521a_0%,_#b88d34_35%,_#f0d17d_68%,_#8a6423_100%)]"
+                          : "border-[#7f6630]/50 bg-[radial-gradient(circle_at_top_left,_rgba(255,230,160,0.2),_transparent_34%),linear-gradient(135deg,_#31220c_0%,_#6d5120_45%,_#9e7830_100%)]"
+                      }`}
+                    >
+                      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,transparent_0%,rgba(255,255,255,0.22)_24%,transparent_44%)] opacity-50" />
+                      <div className="pointer-events-none absolute right-[-48px] top-[-42px] h-32 w-32 rounded-full border border-white/20 bg-white/10 blur-[1px]" />
+                      <div className="pointer-events-none absolute bottom-[-64px] left-[-24px] h-36 w-36 rounded-full bg-black/10 blur-2xl" />
+
+                      <div className="relative z-10 mb-5 flex flex-wrap items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-black/10 text-black">
+                              <MaterialIcon name={goalItem.icon || "flag"} className="text-2xl" fill />
+                            </div>
+                            <div>
+                              <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-black/60">Goal Card {index + 1}</div>
+                              <div className="mt-1 truncate text-xl font-black tracking-[-0.03em] text-black">{cardLabel}</div>
+                            </div>
+                          </div>
+                          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                            <div className="px-1 py-1">
+                              <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-black/55">Target</div>
+                              <div className="mt-1 text-base font-bold text-black">
+                                {goalItem.target_amount ? formatInr(Number(goalItem.target_amount)) : "No amount"}
+                              </div>
+                            </div>
+                            <div className="px-1 py-1">
+                              <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-black/55">Year</div>
+                              <div className="mt-1 text-base font-bold text-black">{goalItem.target_year || "No year"}</div>
+                            </div>
+                            <div className="px-1 py-1">
+                              <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-black/55">Status</div>
+                              <div className="mt-1 text-base font-bold text-black">{formatGoalStatus(goalItem.status)}</div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedGoalId(goalItem.id)}
+                            className={`rounded-full px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] transition ${
+                              isActive
+                                ? "bg-black text-[#f5df9d]"
+                                : "bg-black/10 text-black hover:bg-black/15"
+                            }`}
+                          >
+                            {isActive ? "Active Projection" : "Use in Projection"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveGoal(goalItem.id)}
+                            disabled={savingGoal}
+                            className="rounded-full bg-black/80 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-[#f5df9d] transition hover:scale-[0.99] hover:bg-black disabled:opacity-60"
+                          >
+                            Save Card
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteGoal(goalItem.id)}
+                            disabled={savingGoal}
+                            className="rounded-full bg-black/10 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.16em] text-black transition hover:bg-black/15 disabled:opacity-60"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="relative z-10 grid gap-4 md:grid-cols-2">
+                        <Field label="Goal Name">
+                          <input
+                            type="text"
+                            value={goalItem.goal_name}
+                            onChange={(event) => updateSelectedGoal(setGoals, goalItem.id, "goal_name", event.target.value)}
+                            onFocus={() => setSelectedGoalId(goalItem.id)}
+                            className="w-full border-0 border-b border-black/20 bg-transparent px-0 py-3 text-black outline-none placeholder:text-black/35"
+                          />
+                        </Field>
+                        <Field label="Target Amount">
+                          <input
+                            type="number"
+                            min={1}
+                            value={goalItem.target_amount}
+                            onChange={(event) => updateSelectedGoal(setGoals, goalItem.id, "target_amount", event.target.value)}
+                            onFocus={() => setSelectedGoalId(goalItem.id)}
+                            className="w-full border-0 border-b border-black/20 bg-transparent px-0 py-3 text-black outline-none"
+                          />
+                        </Field>
+                        <Field label="Target Year">
+                          <input
+                            type="number"
+                            min={new Date().getFullYear()}
+                            max={2100}
+                            value={goalItem.target_year}
+                            onChange={(event) => updateSelectedGoal(setGoals, goalItem.id, "target_year", event.target.value)}
+                            onFocus={() => setSelectedGoalId(goalItem.id)}
+                            className="w-full border-0 border-b border-black/20 bg-transparent px-0 py-3 text-black outline-none"
+                          />
+                        </Field>
+                        <Field label="Status">
+                          <select
+                            value={goalItem.status}
+                            onChange={(event) => updateSelectedGoal(setGoals, goalItem.id, "status", event.target.value)}
+                            onFocus={() => setSelectedGoalId(goalItem.id)}
+                            className="w-full border-0 border-b border-black/20 bg-transparent px-0 py-3 text-black outline-none"
+                          >
+                            <option value="seeded">Seeded</option>
+                            <option value="building">Building</option>
+                            <option value="on_track">On Track</option>
+                            <option value="delayed">Delayed</option>
+                          </select>
+                        </Field>
+                        <Field label="Icon">
+                          <input
+                            type="text"
+                            value={goalItem.icon}
+                            onChange={(event) => updateSelectedGoal(setGoals, goalItem.id, "icon", event.target.value)}
+                            onFocus={() => setSelectedGoalId(goalItem.id)}
+                            className="w-full border-0 border-b border-black/20 bg-transparent px-0 py-3 text-black outline-none"
+                          />
+                        </Field>
+                        <div className="flex items-end text-xs text-black/60">
+                          Each card is stored separately in your account metadata, so adding a new goal does not overwrite the older ones.
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="mt-5 flex flex-wrap gap-3">
@@ -447,22 +573,6 @@ export function StrategyPage() {
                   className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10"
                 >
                   New Goal
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveGoal()}
-                  disabled={savingGoal}
-                  className="rounded-2xl bg-white px-4 py-3 text-sm font-bold text-on-primary transition hover:scale-[0.99] disabled:opacity-60"
-                >
-                  {savingGoal ? "Saving..." : "Save Goal"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDeleteGoal()}
-                  disabled={savingGoal}
-                  className="rounded-2xl border border-white/10 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/10 disabled:opacity-60"
-                >
-                  Delete Goal
                 </button>
               </div>
             </Panel>
@@ -527,7 +637,7 @@ export function StrategyPage() {
                     ["Retirement Age", String(strategy.projected_retirement_age), "white"],
                     ["Wealth at 50", strategy.wealth_at_fifty, "tertiary"],
                     ["Risk Sensitivity", strategy.risk_sensitivity, "secondary"],
-                    ["Active Goal", goal.goal_name || "No data available", "white"],
+                    ["Active Goal", selectedGoal.goal_name || "No data available", "white"],
                   ].map(([label, value, tone]) => (
                     <div key={label} className="flex items-center justify-between rounded-2xl bg-white/5 p-4">
                       <span className="text-sm text-on-surface-variant">{label}</span>
@@ -619,7 +729,7 @@ export function StrategyPage() {
 function Field(props: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-neutral-500">{props.label}</div>
+      <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-black/60">{props.label}</div>
       {props.children}
     </label>
   );
@@ -817,8 +927,17 @@ function formatInr(amount: number) {
   }).format(amount);
 }
 
+function formatGoalStatus(status: string) {
+  return status
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function blankGoal(): EditableGoal {
   return {
+    id: createGoalId(),
     goal_name: "",
     target_amount: "",
     target_year: String(new Date().getFullYear() + 3),
@@ -834,6 +953,7 @@ function createInitialGoal(
 ): EditableGoal {
   if (storedGoal?.goal_name && storedGoal.target_amount && storedGoal.target_year) {
     return {
+      id: storedGoal.id ?? createGoalId(),
       goal_name: storedGoal.goal_name,
       target_amount: String(storedGoal.target_amount),
       target_year: String(storedGoal.target_year),
@@ -845,6 +965,7 @@ function createInitialGoal(
   const normalizedGoal = (primaryGoal ?? "").toLowerCase();
   const goalMap: Record<string, EditableGoal> = {
     retirement: {
+      id: createGoalId(),
       goal_name: "Retirement Corpus",
       target_amount: "18000000",
       target_year: String(new Date().getFullYear() + Math.max(timeHorizonYears ?? 15, 10)),
@@ -852,6 +973,7 @@ function createInitialGoal(
       status: "seeded",
     },
     "home purchase": {
+      id: createGoalId(),
       goal_name: "Home Down Payment",
       target_amount: "4500000",
       target_year: String(new Date().getFullYear() + Math.max(timeHorizonYears ?? 5, 4)),
@@ -859,6 +981,7 @@ function createInitialGoal(
       status: "building",
     },
     "family milestone": {
+      id: createGoalId(),
       goal_name: "Marriage Fund",
       target_amount: "1800000",
       target_year: String(new Date().getFullYear() + 2),
@@ -866,6 +989,7 @@ function createInitialGoal(
       status: "on_track",
     },
     "wealth growth": {
+      id: createGoalId(),
       goal_name: "Freedom Ledger",
       target_amount: "12000000",
       target_year: String(new Date().getFullYear() + Math.max(timeHorizonYears ?? 12, 8)),
@@ -873,6 +997,7 @@ function createInitialGoal(
       status: "building",
     },
     "emergency buffer": {
+      id: createGoalId(),
       goal_name: "Emergency Buffer",
       target_amount: "600000",
       target_year: String(new Date().getFullYear() + 1),
@@ -882,6 +1007,7 @@ function createInitialGoal(
   };
 
   return goalMap[normalizedGoal] ?? {
+    id: createGoalId(),
     goal_name: primaryGoal ?? "",
     target_amount: "",
     target_year: String(new Date().getFullYear() + Math.max(timeHorizonYears ?? 3, 3)),
@@ -890,19 +1016,91 @@ function createInitialGoal(
   };
 }
 
-function getStoredGoalFromUserMetadata(value: unknown): StoredStrategyGoal | null {
+function getStoredGoalsFromUserMetadata(value: unknown, legacyValue?: unknown, fallbackGoals?: StoredStrategyGoal[]): StoredStrategyGoal[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => {
+      const parsed = parseStoredGoal(item);
+      return parsed ? [parsed] : [];
+    });
+  }
+
+  const legacyGoal = parseStoredGoal(value) ?? parseStoredGoal(legacyValue);
+  if (legacyGoal) {
+    return [legacyGoal];
+  }
+  return fallbackGoals ?? [];
+}
+
+function parseStoredGoal(value: unknown): StoredStrategyGoal | null {
   if (!value || typeof value !== "object") {
     return null;
   }
 
   const record = value as Record<string, unknown>;
   return {
+    id: typeof record.id === "string" && record.id.trim() ? record.id : undefined,
     goal_name: typeof record.goal_name === "string" ? record.goal_name : undefined,
     target_amount: typeof record.target_amount === "number" ? record.target_amount : undefined,
     target_year: typeof record.target_year === "number" ? record.target_year : undefined,
     icon: typeof record.icon === "string" ? record.icon : undefined,
     status: typeof record.status === "string" ? record.status : undefined,
   };
+}
+
+function updateSelectedGoal(
+  setGoals: Dispatch<SetStateAction<EditableGoal[]>>,
+  goalId: string,
+  field: keyof Omit<EditableGoal, "id">,
+  value: string,
+) {
+  setGoals((current) =>
+    current.map((goal) =>
+      goal.id === goalId
+        ? {
+            ...goal,
+            [field]: value,
+          }
+        : goal,
+    ),
+  );
+}
+
+function createGoalId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `goal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function loadStoredGoalsFromLocalStorage(key: string): StoredStrategyGoal[] | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  const raw = window.localStorage.getItem(key);
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    return parsed.flatMap((item) => {
+      const goal = parseStoredGoal(item);
+      return goal ? [goal] : [];
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function persistGoalsToLocalStorage(key: string, goals: StoredStrategyGoal[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(key, JSON.stringify(goals));
 }
 
 function toRiskMode(value: string | null | undefined): RiskMode {

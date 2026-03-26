@@ -50,6 +50,7 @@ _CACHE: dict[str, tuple[float, Any]] = {}
 _NSE_SOURCE = "NSE India public market endpoints"
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _PORTFOLIO_FILE = _DATA_DIR / "portfolio_holdings.json"
+_PORTFOLIO_DETAILS_FILE = _DATA_DIR / "portfolio_details.json"
 _MARKET_SNAPSHOT_FILE = _DATA_DIR / "market_snapshot.json"
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,8 @@ class PortfolioPosition:
     symbol: str
     quantity: float
     quote: QuoteSnapshot
+    average_buy_price: float | None = None
+    broker: str | None = None
 
     @property
     def market_value(self) -> float:
@@ -73,6 +76,49 @@ class PortfolioPosition:
         if not self.quote.year_high or not self.quote.year_low or not self.quote.last_price:
             return 0.0
         return ((self.quote.year_high - self.quote.year_low) / self.quote.last_price) * 100
+
+    @property
+    def invested_value(self) -> float | None:
+        if self.average_buy_price is None:
+            return None
+        return self.quantity * self.average_buy_price
+
+    @property
+    def estimated_brokerage(self) -> float | None:
+        invested_value = self.invested_value
+        if invested_value is None:
+            return None
+        sell_value = self.market_value
+        turnover = invested_value + sell_value
+        return turnover * settings.estimated_brokerage_rate
+
+    @property
+    def unrealized_profit(self) -> float | None:
+        invested_value = self.invested_value
+        if invested_value is None:
+            return None
+        return self.market_value - invested_value
+
+    @property
+    def break_even_price(self) -> float | None:
+        if self.average_buy_price is None:
+            return None
+        return self.average_buy_price * (1 + settings.estimated_brokerage_rate)
+
+    @property
+    def safe_to_sell(self) -> bool:
+        if self.unrealized_profit is None or self.estimated_brokerage is None:
+            return False
+        return self.unrealized_profit > self.estimated_brokerage
+
+
+@dataclass
+class PortfolioUploadRecord:
+    symbol: str
+    quantity: float
+    average_price: float | None = None
+    company_name: str | None = None
+    broker: str | None = None
 
 
 def get_overview() -> OverviewResponse:
@@ -170,8 +216,10 @@ def analyze_uploaded_portfolio(filename: str, file_obj: BinaryIO) -> UploadPortf
         )
 
     decoded = raw.decode("utf-8-sig", errors="ignore")
-    holdings = _parse_portfolio_csv(decoded)
+    records = _parse_portfolio_csv(decoded)
+    holdings = _records_to_holdings(records)
     _save_uploaded_holdings(holdings)
+    _save_uploaded_details(records)
     _CACHE.clear()
 
     return UploadPortfolioResponse(
@@ -181,15 +229,17 @@ def analyze_uploaded_portfolio(filename: str, file_obj: BinaryIO) -> UploadPortf
         holdings_detected=len(holdings),
         symbols=sorted(holdings.keys()),
         persistence_path=str(_PORTFOLIO_FILE),
+        details_path=str(_PORTFOLIO_DETAILS_FILE),
         notes=[
             "Uploaded CSV holdings have replaced the default configured basket.",
             "All portfolio-derived endpoints now read from the persisted holdings file until you upload a new CSV.",
+            "If average_price is present in the CSV, the audit engine can now calculate brokerage-aware sell safety.",
         ],
     )
 
 
 def analyze_uploaded_portfolios(files: list[tuple[str, BinaryIO]]) -> BatchUploadPortfolioResponse:
-    merged_holdings: dict[str, float] = {}
+    merged_records: list[PortfolioUploadRecord] = []
     filenames: list[str] = []
 
     for filename, file_obj in files:
@@ -199,12 +249,15 @@ def analyze_uploaded_portfolios(files: list[tuple[str, BinaryIO]]) -> BatchUploa
             raise ValueError("Batch replacement currently supports CSV files only.")
 
         decoded = raw.decode("utf-8-sig", errors="ignore")
-        holdings = _parse_portfolio_csv(decoded)
+        records = _parse_portfolio_csv(decoded)
         filenames.append(filename)
-        for symbol, quantity in holdings.items():
-            merged_holdings[symbol] = merged_holdings.get(symbol, 0.0) + quantity
+        merged_records.extend(records)
+
+    merged_records = _merge_portfolio_records(merged_records)
+    merged_holdings = _records_to_holdings(merged_records)
 
     _save_uploaded_holdings(merged_holdings)
+    _save_uploaded_details(merged_records)
     _CACHE.clear()
 
     return BatchUploadPortfolioResponse(
@@ -214,9 +267,11 @@ def analyze_uploaded_portfolios(files: list[tuple[str, BinaryIO]]) -> BatchUploa
         holdings_detected=len(merged_holdings),
         symbols=sorted(merged_holdings.keys()),
         persistence_path=str(_PORTFOLIO_FILE),
+        details_path=str(_PORTFOLIO_DETAILS_FILE),
         notes=[
             "Uploaded CSV files were merged by symbol and now replace the active portfolio basket.",
             "If the same symbol appeared in multiple files, quantities were summed before persistence.",
+            "Average buy prices are merged as weighted averages when available, enabling brokerage-aware sell checks.",
         ],
     )
 
@@ -394,6 +449,13 @@ def get_auditor_report() -> AuditorResponse:
             volatility_impact=min(99, round(position.volatility_proxy)),
             market_value=_format_inr(position.market_value),
             performance=f"{position.quote.percent_change:+.2f}%",
+            average_buy_price=_format_optional_inr(position.average_buy_price),
+            current_price=_format_optional_inr(position.quote.last_price),
+            break_even_price=_format_optional_inr(position.break_even_price),
+            unrealized_profit=_format_optional_signed_inr(position.unrealized_profit),
+            estimated_brokerage=_format_optional_inr(position.estimated_brokerage),
+            safe_to_sell=position.safe_to_sell,
+            sell_signal=_sell_signal(position),
         )
         for position in positions[:6]
     ]
@@ -584,9 +646,19 @@ def get_market_status() -> MarketStatusResponse:
 
 
 def _get_portfolio_positions() -> list[PortfolioPosition]:
+    detail_map = _load_portfolio_details()
     positions: list[PortfolioPosition] = []
     for symbol, quantity in _load_portfolio_holdings().items():
-        positions.append(PortfolioPosition(symbol=symbol, quantity=quantity, quote=get_market_quote(symbol)))
+        detail = detail_map.get(symbol, {})
+        positions.append(
+            PortfolioPosition(
+                symbol=symbol,
+                quantity=quantity,
+                quote=get_market_quote(symbol),
+                average_buy_price=_maybe_float(detail.get("average_price")),
+                broker=detail.get("broker"),
+            )
+        )
     return positions
 
 
@@ -604,6 +676,19 @@ def _load_market_snapshot() -> MarketSnapshotResponse | None:
     return MarketSnapshotResponse.model_validate(payload)
 
 
+def _load_portfolio_details() -> dict[str, dict[str, Any]]:
+    if not _PORTFOLIO_DETAILS_FILE.exists():
+        return {}
+    payload = json.loads(_PORTFOLIO_DETAILS_FILE.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        return {}
+    return {
+        str(item.get("symbol", "")).upper(): item
+        for item in payload
+        if isinstance(item, dict) and item.get("symbol")
+    }
+
+
 def _save_market_snapshot(snapshot: MarketSnapshotResponse) -> None:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     _MARKET_SNAPSHOT_FILE.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
@@ -616,7 +701,22 @@ def _save_uploaded_holdings(holdings: dict[str, float]) -> None:
     _PORTFOLIO_FILE.write_text(json.dumps(holdings, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _parse_portfolio_csv(content: str) -> dict[str, float]:
+def _save_uploaded_details(records: list[PortfolioUploadRecord]) -> None:
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    payload = [
+        {
+            "symbol": record.symbol,
+            "quantity": record.quantity,
+            "average_price": record.average_price,
+            "company_name": record.company_name,
+            "broker": record.broker,
+        }
+        for record in records
+    ]
+    _PORTFOLIO_DETAILS_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _parse_portfolio_csv(content: str) -> list[PortfolioUploadRecord]:
     reader = csv.DictReader(StringIO(content))
     if not reader.fieldnames:
         raise ValueError("CSV is missing a header row.")
@@ -624,11 +724,14 @@ def _parse_portfolio_csv(content: str) -> dict[str, float]:
     field_map = {field.strip().lower(): field for field in reader.fieldnames if field}
     symbol_field = next((field_map[name] for name in ("symbol", "ticker", "security", "instrument") if name in field_map), None)
     quantity_field = next((field_map[name] for name in ("quantity", "qty", "units", "shares") if name in field_map), None)
+    average_price_field = next((field_map[name] for name in ("average_price", "avg_price", "buy_price", "purchase_price") if name in field_map), None)
+    company_name_field = next((field_map[name] for name in ("company_name", "name", "security_name") if name in field_map), None)
+    broker_field = next((field_map[name] for name in ("broker", "broker_name") if name in field_map), None)
 
     if not symbol_field or not quantity_field:
         raise ValueError("CSV must include symbol and quantity columns.")
 
-    holdings: dict[str, float] = {}
+    records: list[PortfolioUploadRecord] = []
     for row in reader:
         raw_symbol = (row.get(symbol_field) or "").strip().upper()
         raw_quantity = (row.get(quantity_field) or "").strip()
@@ -637,11 +740,23 @@ def _parse_portfolio_csv(content: str) -> dict[str, float]:
         quantity = float(raw_quantity.replace(",", ""))
         if quantity <= 0:
             continue
-        holdings[raw_symbol] = holdings.get(raw_symbol, 0.0) + quantity
+        average_price = None
+        raw_average_price = (row.get(average_price_field) or "").strip() if average_price_field else ""
+        if raw_average_price:
+            average_price = float(raw_average_price.replace(",", ""))
+        records.append(
+            PortfolioUploadRecord(
+                symbol=raw_symbol,
+                quantity=quantity,
+                average_price=average_price if average_price and average_price > 0 else None,
+                company_name=(row.get(company_name_field) or "").strip() if company_name_field else None,
+                broker=(row.get(broker_field) or "").strip() if broker_field else None,
+            )
+        )
 
-    if not holdings:
+    if not records:
         raise ValueError("CSV did not contain any valid positive-quantity holdings.")
-    return holdings
+    return _merge_portfolio_records(records)
 
 
 def _quote_to_recommendation(quote: QuoteSnapshot, category: str, action: str) -> Recommendation:
@@ -686,11 +801,66 @@ def _severity_from_percent(percent_change: float) -> str:
 
 
 def _audit_badge(position: PortfolioPosition) -> str:
+    if position.safe_to_sell:
+        return "Safe To Sell"
     if position.volatility_proxy >= 35:
         return "High Range"
     if position.quote.percent_change >= 1:
         return "Momentum Leader"
     return "Core Holding"
+
+
+def _sell_signal(position: PortfolioPosition) -> str:
+    if position.average_buy_price is None:
+        return "No buy price data"
+    if position.break_even_price is None or position.unrealized_profit is None or position.estimated_brokerage is None:
+        return "No data available"
+    if position.safe_to_sell:
+        return (
+            f"Safe to sell. Current price is above break-even by "
+            f"{_format_inr(max(position.quote.last_price - position.break_even_price, 0) * position.quantity)}."
+        )
+    return (
+        f"Hold for now. Profit after estimated brokerage is still below break-even by "
+        f"{_format_inr(max(position.estimated_brokerage - max(position.unrealized_profit, 0), 0))}."
+    )
+
+
+def _records_to_holdings(records: list[PortfolioUploadRecord]) -> dict[str, float]:
+    return {record.symbol: record.quantity for record in records}
+
+
+def _merge_portfolio_records(records: list[PortfolioUploadRecord]) -> list[PortfolioUploadRecord]:
+    merged: dict[str, PortfolioUploadRecord] = {}
+    weighted_costs: dict[str, float] = {}
+    weighted_quantities: dict[str, float] = {}
+
+    for record in records:
+        existing = merged.get(record.symbol)
+        if existing is None:
+            merged[record.symbol] = PortfolioUploadRecord(
+                symbol=record.symbol,
+                quantity=record.quantity,
+                average_price=record.average_price,
+                company_name=record.company_name,
+                broker=record.broker,
+            )
+        else:
+            existing.quantity += record.quantity
+            if not existing.company_name and record.company_name:
+                existing.company_name = record.company_name
+            if not existing.broker and record.broker:
+                existing.broker = record.broker
+
+        if record.average_price is not None:
+            weighted_costs[record.symbol] = weighted_costs.get(record.symbol, 0.0) + (record.average_price * record.quantity)
+            weighted_quantities[record.symbol] = weighted_quantities.get(record.symbol, 0.0) + record.quantity
+
+    for symbol, record in merged.items():
+        if weighted_quantities.get(symbol):
+            record.average_price = weighted_costs[symbol] / weighted_quantities[symbol]
+
+    return sorted(merged.values(), key=lambda record: record.symbol)
 
 
 def _fetch_json(url: str, cache_key: str) -> Any:
@@ -737,6 +907,19 @@ def _maybe_int(value: Any) -> int | None:
 
 def _format_inr(value: float) -> str:
     return f"INR {value:,.2f}"
+
+
+def _format_optional_inr(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return _format_inr(value)
+
+
+def _format_optional_signed_inr(value: float | None) -> str | None:
+    if value is None:
+        return None
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}INR {abs(value):,.2f}"
 
 
 def _iso_now() -> str:

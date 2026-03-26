@@ -7,6 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = Field(default="Nirvesta API", alias="NIRVESTA_APP_NAME")
     env: str = Field(default="local", alias="NIRVESTA_ENV")
+    timezone: str = Field(default="Asia/Kolkata", alias="NIRVESTA_TIMEZONE")
     api_prefix: str = Field(default="/api/v1", alias="NIRVESTA_API_PREFIX")
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -34,6 +35,19 @@ class Settings(BaseSettings):
     )
     market_cache_ttl_seconds: int = Field(default=60, alias="NIRVESTA_MARKET_CACHE_TTL_SECONDS")
     market_refresh_interval_seconds: int = Field(default=3600, alias="NIRVESTA_MARKET_REFRESH_INTERVAL_SECONDS")
+    estimated_brokerage_rate: float = Field(default=0.003, alias="NIRVESTA_ESTIMATED_BROKERAGE_RATE")
+    redis_url: str = Field(default="redis://localhost:6379/0", alias="NIRVESTA_REDIS_URL")
+    celery_broker_url: str | None = Field(default=None, alias="NIRVESTA_CELERY_BROKER_URL")
+    celery_result_backend: str | None = Field(default=None, alias="NIRVESTA_CELERY_RESULT_BACKEND")
+    use_celery_scheduler: bool = Field(default=False, alias="NIRVESTA_USE_CELERY_SCHEDULER")
+
+    @property
+    def resolved_celery_broker_url(self) -> str:
+        return self.celery_broker_url or self.redis_url
+
+    @property
+    def resolved_celery_result_backend(self) -> str:
+        return self.celery_result_backend or self.redis_url
 
     model_config = SettingsConfigDict(
         env_file=".env",

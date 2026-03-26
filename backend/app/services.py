@@ -18,6 +18,7 @@ from .models import (
     AlertItem,
     AnalyzeRequest,
     AnalyzeResponse,
+    AlertsNewsResponse,
     AuditHolding,
     AuditRecommendation,
     AuditorResponse,
@@ -210,6 +211,76 @@ def analyze_with_master_flow(payload: AnalyzeRequest) -> AnalyzeResponse:
         webhook_url=webhook_url,
         result=response_payload if isinstance(response_payload, dict) else {"data": response_payload},
     )
+
+
+def get_alerts_news_brief(focus_alert: str | None = None) -> AlertsNewsResponse:
+    sentinel = get_sentinel_alerts()
+    symbols = list(_load_portfolio_holdings().keys())
+    default_focus = sentinel.alerts[0].headline if sentinel.alerts else None
+    selected_focus = focus_alert or default_focus
+
+    fallback_highlights = [alert.headline for alert in sentinel.alerts[:3]]
+    fallback_actions = [alert.action.replace("_", " ").title() for alert in sentinel.alerts[:3] if alert.action]
+    fallback_summary = (
+        f"Zenith Sentinel is monitoring {len(sentinel.alerts)} live alert(s) with aggregate impact "
+        f"{sentinel.aggregate_impact} and vulnerability score {sentinel.vulnerability_score}."
+    )
+
+    if not settings.n8n_master_flow_webhook_url:
+        return AlertsNewsResponse(
+            workflow="local_fallback",
+            generated_at=_iso_now(),
+            focus_alert=selected_focus,
+            summary=fallback_summary,
+            highlights=fallback_highlights,
+            actions=fallback_actions,
+            raw_result={},
+        )
+
+    query = (
+        "Review the live portfolio alerts and produce a concise risk-news briefing with a summary, "
+        "3 highlights, and 3 action items."
+    )
+    if selected_focus:
+        query += f" Focus especially on this alert: {selected_focus}"
+
+    try:
+        analysis = analyze_with_master_flow(
+            AnalyzeRequest(
+                query=query,
+                symbols=symbols,
+                portfolio=_load_portfolio_holdings(),
+                context={
+                    "focus_alert": selected_focus,
+                    "sentinel_alerts": [alert.model_dump() for alert in sentinel.alerts[:5]],
+                    "aggregate_impact": sentinel.aggregate_impact,
+                    "vulnerability_score": sentinel.vulnerability_score,
+                },
+            )
+        )
+        raw_result = analysis.result
+        summary = _extract_summary(raw_result) or fallback_summary
+        highlights = _extract_lines(raw_result, ("highlights", "headline", "headlines", "signals"), 3) or fallback_highlights
+        actions = _extract_lines(raw_result, ("action", "actions", "action_plan", "risk_controls"), 3) or fallback_actions
+        return AlertsNewsResponse(
+            workflow=analysis.workflow,
+            generated_at=_iso_now(),
+            focus_alert=selected_focus,
+            summary=summary,
+            highlights=highlights,
+            actions=actions,
+            raw_result=raw_result,
+        )
+    except OSError:
+        return AlertsNewsResponse(
+            workflow="local_fallback",
+            generated_at=_iso_now(),
+            focus_alert=selected_focus,
+            summary=fallback_summary,
+            highlights=fallback_highlights,
+            actions=fallback_actions,
+            raw_result={},
+        )
 
 
 def create_connect_session(payload: ConnectSessionRequest) -> ConnectSessionResponse:
@@ -924,6 +995,102 @@ def _post_json(url: str, payload: dict[str, Any]) -> Any:
     if not raw.strip():
         return {"message": "n8n master_flow returned an empty response."}
     return json.loads(raw)
+
+
+def _extract_summary(payload: Any) -> str | None:
+    preferred_keys = (
+        "executive_summary",
+        "summary",
+        "investment_thesis",
+        "market_view",
+        "decision",
+        "result",
+        "text",
+        "output",
+    )
+    for key in preferred_keys:
+        value = _find_first_value(payload, key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    flattened = _flatten_strings(payload)
+    return flattened[0] if flattened else None
+
+
+def _extract_lines(payload: Any, preferred_keys: tuple[str, ...], limit: int) -> list[str]:
+    lines: list[str] = []
+    for key in preferred_keys:
+        values = _find_all_values(payload, key)
+        for value in values:
+            lines.extend(_value_to_lines(value))
+    deduped: list[str] = []
+    for line in lines:
+        cleaned = line.strip()
+        if cleaned and cleaned not in deduped:
+            deduped.append(cleaned)
+        if len(deduped) >= limit:
+            break
+    return deduped[:limit]
+
+
+def _find_first_value(payload: Any, target_key: str) -> Any | None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == target_key:
+                return value
+            nested = _find_first_value(value, target_key)
+            if nested is not None:
+                return nested
+    elif isinstance(payload, list):
+        for item in payload:
+            nested = _find_first_value(item, target_key)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _find_all_values(payload: Any, target_key: str) -> list[Any]:
+    matches: list[Any] = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key == target_key:
+                matches.append(value)
+            matches.extend(_find_all_values(value, target_key))
+    elif isinstance(payload, list):
+        for item in payload:
+            matches.extend(_find_all_values(item, target_key))
+    return matches
+
+
+def _flatten_strings(payload: Any) -> list[str]:
+    if isinstance(payload, str):
+        return [payload]
+    if isinstance(payload, dict):
+        values: list[str] = []
+        for value in payload.values():
+            values.extend(_flatten_strings(value))
+        return values
+    if isinstance(payload, list):
+        values: list[str] = []
+        for item in payload:
+            values.extend(_flatten_strings(item))
+        return values
+    return []
+
+
+def _value_to_lines(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        lines: list[str] = []
+        for item in value:
+            if isinstance(item, str):
+                lines.append(item)
+            elif isinstance(item, dict):
+                lines.extend(_flatten_strings(item))
+        return lines
+    if isinstance(value, dict):
+        return _flatten_strings(value)
+    return []
 
 
 def _get_cached(key: str) -> Any | None:

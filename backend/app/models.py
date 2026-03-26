@@ -23,6 +23,16 @@ class AnalyzeResponse(BaseModel):
     result: dict[str, object]
 
 
+class AlertsNewsResponse(BaseModel):
+    workflow: str
+    generated_at: str
+    focus_alert: str | None = None
+    summary: str
+    highlights: list[str]
+    actions: list[str]
+    raw_result: dict[str, object]
+
+
 class OverviewStat(BaseModel):
     label: str
     value: str

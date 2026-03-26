@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { AppShell } from "../components/chrome";
 import { MaterialIcon } from "../components/MaterialIcon";
 import { Panel } from "../components/ui";
+import { apiRootBaseUrl, apiV1BaseUrl, fetchJson, postJson } from "../lib/api";
 
 const zenithPurple = "#7c5cff";
-const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
 const sectorIndexNames = ["NIFTY IT", "NIFTY PHARMA", "NIFTY BANK", "NIFTY AUTO", "NIFTY FMCG", "NIFTY ENERGY"];
 
 type OverviewStat = {
@@ -87,6 +87,13 @@ type MarketIndexResponse = {
   }>;
 };
 
+type AnalyzeResponse = {
+  status: "accepted" | "completed";
+  workflow: string;
+  webhook_url: string;
+  result: Record<string, unknown>;
+};
+
 export function CommandCenterPage() {
   const { profile } = useAuth();
   const [sipAmount, setSipAmount] = useState(profile?.monthly_investable_surplus ?? 4500);
@@ -99,6 +106,11 @@ export function CommandCenterPage() {
   const [sentinel, setSentinel] = useState<SentinelResponse | null>(null);
   const [briefing, setBriefing] = useState<CommandCenterResponse | null>(null);
   const [indices, setIndices] = useState<MarketIndexResponse["indices"]>([]);
+  const [agentSummary, setAgentSummary] = useState<string | null>(null);
+  const [agentHighlights, setAgentHighlights] = useState<string[]>([]);
+  const [agentActions, setAgentActions] = useState<string[]>([]);
+  const [agentLoading, setAgentLoading] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
   const fullName = profile?.full_name?.split(" ")[0] ?? "Investor";
   const hasPortfolio = Boolean(auditor?.holdings?.length);
 
@@ -111,11 +123,11 @@ export function CommandCenterPage() {
 
       try {
         const [overviewResponse, auditorResponse, sentinelResponse, briefingResponse, indicesResponse] = await Promise.all([
-          fetchJson<OverviewResponse>(`${apiBaseUrl}/overview`),
-          fetchJson<AuditorResponse>(`${apiBaseUrl}/auditor/report`),
-          fetchJson<SentinelResponse>(`${apiBaseUrl}/sentinel/alerts`),
-          fetchJson<CommandCenterResponse>(`${apiBaseUrl}/command-center/briefing`),
-          fetchJson<MarketIndexResponse>(`${apiBaseUrl}/market/indices?index_names=${encodeURIComponent(sectorIndexNames.join(","))}`),
+          fetchJson<OverviewResponse>(`${apiV1BaseUrl}/overview`),
+          fetchJson<AuditorResponse>(`${apiV1BaseUrl}/auditor/report`),
+          fetchJson<SentinelResponse>(`${apiV1BaseUrl}/sentinel/alerts`),
+          fetchJson<CommandCenterResponse>(`${apiV1BaseUrl}/command-center/briefing`),
+          fetchJson<MarketIndexResponse>(`${apiV1BaseUrl}/market/indices?index_names=${encodeURIComponent(sectorIndexNames.join(","))}`),
         ]);
 
         if (cancelled) {
@@ -149,7 +161,7 @@ export function CommandCenterPage() {
 
     async function loadStrategy() {
       try {
-        const response = await fetchJson<StrategySimulationResponse>(`${apiBaseUrl}/strategy/simulate`, {
+        const response = await fetchJson<StrategySimulationResponse>(`${apiV1BaseUrl}/strategy/simulate`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -175,6 +187,53 @@ export function CommandCenterPage() {
       cancelled = true;
     };
   }, [sipAmount]);
+
+  const requestAgentAnalysis = useCallback(async (query?: string) => {
+    if (!auditor?.holdings?.length) {
+      return;
+    }
+
+    setAgentLoading(true);
+    setAgentError(null);
+
+    try {
+      const response = await postJson<AnalyzeResponse>(`${apiRootBaseUrl}/api/analyze`, {
+        query:
+          query ??
+          "Review my live portfolio, summarize the biggest risks and opportunities, and recommend the highest priority next action.",
+        symbols: auditor.holdings.map((holding) => holding.symbol),
+        context: {
+          investor_name: fullName,
+          portfolio_value: overview?.total_portfolio_value,
+          risk_profile: overview?.risk_profile,
+          sentinel_alerts: sentinel?.alerts?.map((alert) => alert.headline) ?? [],
+          command_headlines: briefing?.headlines ?? [],
+        },
+      });
+
+      const summary = extractAgentSummary(response.result);
+      const highlights = extractAgentHighlights(response.result);
+      const actions = extractAgentActions(response.result);
+
+      setAgentSummary(compactText(summary ?? "The master agent completed successfully, but did not return a concise summary field.", 140));
+      setAgentHighlights(highlights.map((item) => compactText(item, 110)).slice(0, 3));
+      setAgentActions(actions.map((item) => compactText(item, 90)).slice(0, 3));
+    } catch {
+      setAgentError("The master AI agent could not be reached. Make sure the backend and n8n master_flow are both running.");
+    } finally {
+      setAgentLoading(false);
+    }
+  }, [auditor?.holdings, briefing?.headlines, fullName, overview?.risk_profile, overview?.total_portfolio_value, sentinel?.alerts]);
+
+  useEffect(() => {
+    if (!auditor?.holdings?.length) {
+      setAgentSummary(null);
+      setAgentHighlights([]);
+      setAgentActions([]);
+      return;
+    }
+    void requestAgentAnalysis();
+  }, [auditor?.holdings, requestAgentAnalysis]);
 
   const radarMetrics = useMemo(() => {
     if (!auditor || !sentinel) {
@@ -246,28 +305,45 @@ export function CommandCenterPage() {
 
   const microInsights = useMemo(() => {
     const insights: string[] = [];
+    if (agentSummary) {
+      insights.push(agentSummary);
+    }
     if (overview?.risk_profile) {
-      insights.push(`Portfolio stance: ${overview.risk_profile}.`);
+      insights.push(compactText(`Portfolio stance: ${overview.risk_profile}.`, 90));
     }
     if (briefing?.headlines?.length) {
-      insights.push(...briefing.headlines.slice(0, 2));
+      insights.push(...briefing.headlines.slice(0, 2).map((item) => compactText(item, 100)));
     }
     if (sentinel?.alerts?.length) {
-      insights.push(...sentinel.alerts.slice(0, 2).map((alert) => alert.headline));
+      insights.push(...sentinel.alerts.slice(0, 2).map((alert) => compactText(alert.headline, 100)));
     }
-    return insights;
-  }, [briefing, overview, sentinel]);
+    if (agentHighlights.length) {
+      insights.push(...agentHighlights.slice(0, 2));
+    }
+    return insights.slice(0, 4);
+  }, [agentHighlights, agentSummary, briefing, overview, sentinel]);
 
   const executionActions = useMemo(() => {
     if (!briefing?.signals?.length) {
-      return [];
+      return agentActions.map((action) => ({
+        title: action,
+        subtitle: "Generated by the master AI agent",
+        icon: "psychology",
+      }));
     }
-    return briefing.signals.map((signal) => ({
-      title: signal.title,
-      subtitle: signal.reasoning,
-      icon: signal.action.includes("rebalance") ? "sync_alt" : "bolt",
-    }));
-  }, [briefing]);
+    return [
+      ...briefing.signals.map((signal) => ({
+        title: compactText(signal.title, 64),
+        subtitle: compactText(signal.reasoning, 88),
+        icon: signal.action.includes("rebalance") ? "sync_alt" : "bolt",
+      })),
+      ...agentActions.slice(0, 2).map((action) => ({
+        title: action,
+        subtitle: "Master AI follow-through",
+        icon: "psychology",
+      })),
+    ];
+  }, [agentActions, briefing]);
 
   const sectorHeatmap = useMemo(() => {
     return indices.map((index) => ({
@@ -409,11 +485,24 @@ export function CommandCenterPage() {
                   <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-tertiary">Agent Intelligence</p>
                   <h3 className="mt-2 text-xl font-bold text-white">Live micro-insights</h3>
                 </div>
-                <span className="flex items-center gap-2 text-[10px] uppercase tracking-[0.2em] text-tertiary">
-                  <span className="h-2 w-2 rounded-full bg-tertiary" />
-                  Watching
-                </span>
+                <button
+                  type="button"
+                  onClick={() => void requestAgentAnalysis()}
+                  disabled={agentLoading || !hasPortfolio}
+                  className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-tertiary transition hover:border-tertiary/40 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {agentLoading ? "Refreshing" : "Refresh AI"}
+                </button>
               </div>
+              {agentSummary || agentError ? (
+                <div className={`mb-4 rounded-2xl border p-4 ${agentError ? "border-error/20 bg-error/10" : "border-tertiary/20 bg-tertiary/10"}`}>
+                  <div className="mb-2 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-neutral-400">
+                    <MaterialIcon name={agentError ? "error" : "hub"} className="text-sm" />
+                    Master Flow
+                  </div>
+                  <p className={`text-sm leading-relaxed ${agentError ? "text-error" : "text-white"}`}>{agentError ?? agentSummary}</p>
+                </div>
+              ) : null}
               <div className="space-y-4">
                 {microInsights.length > 0 ? microInsights.map((insight, index) => (
                   <div key={insight} className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
@@ -437,7 +526,12 @@ export function CommandCenterPage() {
               </div>
               <div className="space-y-3">
                 {executionActions.length > 0 ? executionActions.map((action) => (
-                  <button key={action.title} className="w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:border-tertiary/40 hover:bg-white/10">
+                  <button
+                    key={action.title}
+                    type="button"
+                    onClick={() => void requestAgentAnalysis(`${action.title}. ${action.subtitle}. Recommend the next best portfolio action.`)}
+                    className="w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:border-tertiary/40 hover:bg-white/10"
+                  >
                     <div className="flex items-start gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-tertiary/15 text-tertiary">
                         <MaterialIcon name={action.icon} className="text-xl" />
@@ -486,14 +580,6 @@ export function CommandCenterPage() {
   );
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit) {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    throw new Error(`Request failed for ${url}`);
-  }
-  return response.json() as Promise<T>;
-}
-
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
@@ -515,6 +601,110 @@ function parseLeadingPercent(value?: string) {
   }
   const match = value.match(/[+-]?\d+(?:\.\d+)?/);
   return match ? Number(match[0]) : 0;
+}
+
+function extractAgentSummary(result: Record<string, unknown>) {
+  return findFirstString(result, [
+    "executive_summary",
+    "summary",
+    "investment_thesis",
+    "market_view",
+    "decision",
+    "result",
+    "text",
+    "output",
+  ]);
+}
+
+function extractAgentHighlights(result: Record<string, unknown>) {
+  return dedupeStrings(collectStringsForKeys(result, ["highlights", "headline", "headlines", "signals"])).slice(0, 3);
+}
+
+function extractAgentActions(result: Record<string, unknown>) {
+  return dedupeStrings(collectStringsForKeys(result, ["actions", "action", "action_plan", "risk_controls"])).slice(0, 3);
+}
+
+function findFirstString(value: unknown, preferredKeys: string[]): string | null {
+  if (typeof value === "string") {
+    return value.trim() || null;
+  }
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const match = findFirstString(item, preferredKeys);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of preferredKeys) {
+    const match = findFirstString(record[key], preferredKeys);
+    if (match) {
+      return match;
+    }
+  }
+  for (const nested of Object.values(record)) {
+    const match = findFirstString(nested, preferredKeys);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+function collectStringsForKeys(value: unknown, preferredKeys: string[]): string[] {
+  if (!value || typeof value !== "object") {
+    return typeof value === "string" ? [value] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectStringsForKeys(item, preferredKeys));
+  }
+
+  const record = value as Record<string, unknown>;
+  const matches = preferredKeys.flatMap((key) => flattenStrings(record[key]));
+  if (matches.length > 0) {
+    return matches;
+  }
+  return Object.values(record).flatMap((nested) => collectStringsForKeys(nested, preferredKeys));
+}
+
+function flattenStrings(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenStrings(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).flatMap((nested) => flattenStrings(nested));
+  }
+  return [];
+}
+
+function dedupeStrings(values: string[]) {
+  return values.reduce<string[]>((items, value) => {
+    const cleaned = value.trim();
+    if (cleaned && !items.includes(cleaned)) {
+      items.push(cleaned);
+    }
+    return items;
+  }, []);
+}
+
+function compactText(value: string, maxLength: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  const clipped = normalized.slice(0, maxLength - 1);
+  const lastSpace = clipped.lastIndexOf(" ");
+  return `${(lastSpace > 40 ? clipped.slice(0, lastSpace) : clipped).trim()}...`;
 }
 
 function KpiCard(props: {

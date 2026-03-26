@@ -4,6 +4,7 @@ from .config import get_settings
 from .models import (
     AnalyzeRequest,
     AnalyzeResponse,
+    AlertsNewsResponse,
     AuditorResponse,
     BatchUploadPortfolioResponse,
     CommandCenterResponse,
@@ -28,6 +29,7 @@ from .services import (
     analyze_uploaded_portfolio,
     analyze_uploaded_portfolios,
     create_connect_session,
+    get_alerts_news_brief,
     get_auditor_report,
     get_command_center_briefing,
     get_market_indices,
@@ -127,6 +129,11 @@ def market_recommendations() -> MarketEngineResponse:
 @router.get("/sentinel/alerts", response_model=SentinelResponse)
 def sentinel_alerts() -> SentinelResponse:
     return get_sentinel_alerts()
+
+
+@router.get("/alerts/news", response_model=AlertsNewsResponse)
+def alerts_news(focus_alert: str | None = Query(default=None, description="Optional alert headline to focus the AI briefing")) -> AlertsNewsResponse:
+    return get_alerts_news_brief(focus_alert)
 
 
 @router.get("/auditor/report", response_model=AuditorResponse)

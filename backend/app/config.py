@@ -1,7 +1,8 @@
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -10,14 +11,14 @@ class Settings(BaseSettings):
     timezone: str = Field(default="Asia/Kolkata", alias="NIRVESTA_TIMEZONE")
     api_prefix: str = Field(default="/api/v1", alias="NIRVESTA_API_PREFIX")
     analyze_api_path: str = Field(default="/api/analyze", alias="NIRVESTA_ANALYZE_API_PATH")
-    allowed_origins: list[str] = Field(
+    allowed_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"],
         alias="NIRVESTA_ALLOWED_ORIGINS",
     )
     mcp_transport: str = Field(default="stdio", alias="NIRVESTA_MCP_TRANSPORT")
     nse_base_url: str = Field(default="https://www.nseindia.com/api", alias="NIRVESTA_NSE_BASE_URL")
     nse_referer: str = Field(default="https://www.nseindia.com/", alias="NIRVESTA_NSE_REFERER")
-    market_symbols: list[str] = Field(
+    market_symbols: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "INFY",
             "HDFCBANK",
@@ -30,7 +31,7 @@ class Settings(BaseSettings):
         ],
         alias="NIRVESTA_MARKET_SYMBOLS",
     )
-    portfolio_holdings: dict[str, float] = Field(
+    portfolio_holdings: Annotated[dict[str, float], NoDecode] = Field(
         default_factory=dict,
         alias="NIRVESTA_PORTFOLIO_HOLDINGS",
     )
@@ -56,6 +57,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     @field_validator("allowed_origins", mode="before")

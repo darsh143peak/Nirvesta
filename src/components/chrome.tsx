@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { MaterialIcon } from "./MaterialIcon";
 
 type NavItem = {
@@ -22,6 +23,7 @@ export function TopBar(props: {
   rightSlot?: React.ReactNode;
 }) {
   const { nav, metricLabel = "Investable Surplus", metricValue = "$42,500.00", rightSlot } = props;
+  const { isAuthenticated, profile, signOut } = useAuth();
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-white/5 bg-background/80 px-6 py-4 backdrop-blur-xl">
@@ -54,6 +56,20 @@ export function TopBar(props: {
             <span className="text-sm font-bold text-tertiary">{metricValue}</span>
           </div>
           {rightSlot}
+          {isAuthenticated ? (
+            <div className="hidden items-center gap-3 md:flex">
+              <div className="text-right">
+                <div className="text-sm font-semibold text-white">{profile?.full_name ?? "Verified User"}</div>
+                <div className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">JWT Session Active</div>
+              </div>
+              <button
+                onClick={() => void signOut()}
+                className="rounded-2xl border border-white/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-white transition hover:bg-white/10"
+              >
+                Logout
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </header>
@@ -61,6 +77,8 @@ export function TopBar(props: {
 }
 
 export function Sidebar() {
+  const { isAuthenticated } = useAuth();
+
   return (
     <aside className="fixed left-0 top-0 hidden h-screen w-64 flex-col border-r border-white/5 bg-surface-container-lowest px-4 pb-6 pt-24 lg:flex">
       <div className="mb-8 px-4">
@@ -68,7 +86,7 @@ export function Sidebar() {
         <p className="mt-1 text-[10px] uppercase tracking-[0.22em] text-neutral-500">Autonomous Mode</p>
       </div>
       <nav className="space-y-1">
-        {primaryNav.map((item) => (
+        {primaryNav.filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect").map((item) => (
           <NavLink
             key={item.href}
             to={item.href}
@@ -91,9 +109,14 @@ export function Sidebar() {
 }
 
 export function MobileDock() {
+  const { isAuthenticated } = useAuth();
+
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-around rounded-t-[2rem] border-t border-white/10 bg-background/90 px-4 py-3 backdrop-blur-xl lg:hidden">
-      {primaryNav.slice(0, 4).map((item) => (
+      {primaryNav
+        .filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect")
+        .slice(0, 4)
+        .map((item) => (
         <NavLink
           key={item.href}
           to={item.href}

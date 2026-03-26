@@ -8,12 +8,12 @@ import { SentinelPage } from "./pages/SentinelPage";
 import { StrategyPage } from "./pages/StrategyPage";
 
 export const routes = [
-  { path: "/", element: LandingPage },
-  { path: "/connect", element: AuthConnectPage },
-  { path: "/concierge", element: ConciergePage },
-  { path: "/strategy", element: StrategyPage },
-  { path: "/market-engine", element: MarketEnginePage },
-  { path: "/sentinel", element: SentinelPage },
-  { path: "/auditor", element: PortfolioAuditorPage },
-  { path: "/command-center", element: CommandCenterPage },
+  { path: "/", element: LandingPage, protected: false },
+  { path: "/connect", element: AuthConnectPage, protected: false },
+  { path: "/concierge", element: ConciergePage, protected: true },
+  { path: "/strategy", element: StrategyPage, protected: true },
+  { path: "/market-engine", element: MarketEnginePage, protected: true },
+  { path: "/sentinel", element: SentinelPage, protected: true },
+  { path: "/auditor", element: PortfolioAuditorPage, protected: true },
+  { path: "/command-center", element: CommandCenterPage, protected: true },
 ] as const;

@@ -14,7 +14,7 @@ const primaryNav: NavItem[] = [
   { label: "Portfolio", href: "/auditor", icon: "account_balance_wallet" },
   { label: "Strategies", href: "/strategy", icon: "query_stats" },
   { label: "Alerts", href: "/sentinel", icon: "notifications_active" },
-  { label: "Settings", href: "/connect", icon: "settings" },
+  { label: "Settings", href: "/settings", icon: "settings" },
 ];
 
 function getPublicNav(items: NavItem[]) {

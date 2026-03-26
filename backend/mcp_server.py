@@ -9,8 +9,11 @@ from app.services import (
     get_market_quote,
     get_market_quotes,
     get_market_recommendations,
+    get_market_snapshot,
     get_market_status,
     get_overview,
+    get_tracked_symbols,
+    refresh_market_snapshot,
     get_sentinel_alerts,
     respond_to_concierge,
     simulate_strategy,
@@ -31,6 +34,12 @@ def overview_resource() -> dict:
 def market_status_resource() -> dict:
     """Return the latest NSE market status payload."""
     return get_market_status().model_dump()
+
+
+@mcp.resource("nirvesta://nse/market-snapshot")
+def market_snapshot_resource() -> dict:
+    """Return the latest persisted tracked-market snapshot."""
+    return get_market_snapshot().model_dump()
 
 
 @mcp.tool()
@@ -116,6 +125,18 @@ def get_nse_indices(index_names: str = "") -> dict:
 def get_nse_market_status() -> dict:
     """Return the latest NSE market status snapshot."""
     return get_market_status().model_dump()
+
+
+@mcp.tool()
+def get_tracked_nse_quotes() -> dict:
+    """Return live NSE quotes for the full tracked symbol universe."""
+    return get_market_quotes(get_tracked_symbols()).model_dump()
+
+
+@mcp.tool()
+def refresh_tracked_market_snapshot() -> dict:
+    """Refresh and persist the tracked NSE market snapshot immediately."""
+    return refresh_market_snapshot().model_dump()
 
 
 @mcp.tool()

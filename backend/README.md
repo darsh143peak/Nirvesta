@@ -33,11 +33,11 @@ The API will start on `http://127.0.0.1:8000`.
 
 ## Live Data Configuration
 
-Set a watchlist and a default portfolio basket in `.env`:
+Set a watchlist in `.env`:
 
 ```bash
 NIRVESTA_MARKET_SYMBOLS=INFY,HDFCBANK,RELIANCE,ITC,SBIN,NIFTYBEES,GOLDBEES,MID150BEES
-NIRVESTA_PORTFOLIO_HOLDINGS=INFY:12,HDFCBANK:18,RELIANCE:8,ITC:150,SBIN:25,NIFTYBEES:80,GOLDBEES:60
+NIRVESTA_MARKET_REFRESH_INTERVAL_SECONDS=3600
 ```
 
 New market endpoints:
@@ -45,6 +45,20 @@ New market endpoints:
 - `GET /api/v1/market/quotes?symbols=INFY,RELIANCE,NIFTYBEES`
 - `GET /api/v1/market/indices?index_names=NIFTY 50,NIFTY BANK,NIFTY IT`
 - `GET /api/v1/market/status`
+- `GET /api/v1/market/snapshot`
+
+## Hourly Market Refresh
+
+The backend now runs a cron-like hourly scheduler when the FastAPI app starts.
+
+It refreshes and persists live quotes for the full tracked symbol universe:
+
+- every symbol in `NIRVESTA_MARKET_SYMBOLS`
+- every symbol from `backend/data/portfolio_holdings.json` after CSV upload
+
+The persisted hourly snapshot is written to:
+
+- `backend/data/market_snapshot.json`
 
 ## Upload CSV Holdings
 
@@ -92,8 +106,10 @@ The MCP server now exposes NSE-backed tools such as:
 
 - `get_nse_quote`
 - `get_nse_quotes`
+- `get_tracked_nse_quotes`
 - `get_nse_indices`
 - `get_nse_market_status`
+- `refresh_tracked_market_snapshot`
 - `get_market_opportunities`
 - `get_auditor_snapshot`
 

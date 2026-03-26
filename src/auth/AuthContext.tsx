@@ -47,6 +47,58 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+function isMissingProfilesTable(error: { message?: string; code?: string } | null | undefined) {
+  const message = error?.message?.toLowerCase() ?? "";
+  return message.includes("could not find the table 'public.profiles'") || message.includes("schema cache");
+}
+
+function toNullableNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function toNullableBoolean(value: unknown) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    if (value === "true") {
+      return true;
+    }
+    if (value === "false") {
+      return false;
+    }
+  }
+  return null;
+}
+
+function profileFromUser(user: User | null): UserProfile | null {
+  if (!user) {
+    return null;
+  }
+
+  const metadata = user.user_metadata ?? {};
+  return {
+    id: user.id,
+    full_name: typeof metadata.full_name === "string" ? metadata.full_name : null,
+    age: toNullableNumber(metadata.age),
+    email: user.email ?? (typeof metadata.email === "string" ? metadata.email : null),
+    risk_attitude: typeof metadata.risk_attitude === "string" ? metadata.risk_attitude : null,
+    investing_experience: typeof metadata.investing_experience === "string" ? metadata.investing_experience : null,
+    primary_goal: typeof metadata.primary_goal === "string" ? metadata.primary_goal : null,
+    time_horizon_years: toNullableNumber(metadata.time_horizon_years),
+    monthly_investable_surplus: toNullableNumber(metadata.monthly_investable_surplus),
+    emergency_fund_months: toNullableNumber(metadata.emergency_fund_months),
+    email_notifications: toNullableBoolean(metadata.email_notifications),
+  };
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -59,8 +111,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const { data } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle<UserProfile>();
-    setProfile(data ?? null);
+    const sessionUser = user?.id === userId ? user : session?.user ?? null;
+    const { data, error } = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle<UserProfile>();
+
+    if (error && isMissingProfilesTable(error)) {
+      setProfile(profileFromUser(sessionUser));
+      return;
+    }
+
+    if (error) {
+      setProfile(profileFromUser(sessionUser));
+      return;
+    }
+
+    if (data) {
+      setProfile(data);
+      return;
+    }
+
+    setProfile(profileFromUser(sessionUser));
   }
 
   useEffect(() => {
@@ -174,9 +243,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (!error) {
           await refreshProfile(user.id);
+          return { error: null };
         }
 
-        return { error: error?.message ?? null };
+        if (!isMissingProfilesTable(error)) {
+          return { error: error?.message ?? null };
+        }
+
+        const { error: metadataError, data } = await supabase.auth.updateUser({
+          data: {
+            ...user.user_metadata,
+            ...updates,
+          },
+        });
+
+        if (metadataError) {
+          return { error: metadataError.message };
+        }
+
+        setUser(data.user);
+        setProfile(profileFromUser(data.user));
+        return { error: null };
       },
       refreshProfile,
     }),

@@ -4,6 +4,7 @@ import { ConciergePage } from "./pages/ConciergePage";
 import { LandingPage } from "./pages/LandingPage";
 import { MarketEnginePage } from "./pages/MarketEnginePage";
 import { PortfolioAuditorPage } from "./pages/PortfolioAuditorPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { SentinelPage } from "./pages/SentinelPage";
 import { StrategyPage } from "./pages/StrategyPage";
 
@@ -16,4 +17,5 @@ export const routes = [
   { path: "/sentinel", element: SentinelPage, protected: true },
   { path: "/auditor", element: PortfolioAuditorPage, protected: true },
   { path: "/command-center", element: CommandCenterPage, protected: true },
+  { path: "/settings", element: SettingsPage, protected: true },
 ] as const;

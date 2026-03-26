@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,6 +31,7 @@ from .models import (
     MarketEngineResponse,
     MarketIndicesResponse,
     MarketQuoteResponse,
+    MarketSnapshotResponse,
     MarketStatusItem,
     MarketStatusResponse,
     OverviewResponse,
@@ -48,6 +50,8 @@ _CACHE: dict[str, tuple[float, Any]] = {}
 _NSE_SOURCE = "NSE India public market endpoints"
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _PORTFOLIO_FILE = _DATA_DIR / "portfolio_holdings.json"
+_MARKET_SNAPSHOT_FILE = _DATA_DIR / "market_snapshot.json"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -298,16 +302,19 @@ def simulate_strategy(payload: StrategySimulationRequest) -> StrategySimulationR
 
 
 def get_market_recommendations() -> MarketEngineResponse:
-    quotes = {quote.symbol: quote for quote in get_market_quotes(["NIFTYBEES", "MID150BEES", "GOLDBEES"]).quotes}
+    tracked_quotes = get_market_quotes().quotes
     indices = get_market_indices(["NIFTY 50", "NIFTY BANK", "NIFTY IT"]).indices
     nifty = next(index for index in indices if index.index == "NIFTY 50")
+    if not tracked_quotes:
+        return MarketEngineResponse(sentiment="No data available", recommendations=[], projected_acceleration=[])
+
+    top_candidates = sorted(tracked_quotes, key=lambda item: item.percent_change, reverse=True)[: min(3, len(tracked_quotes))]
 
     return MarketEngineResponse(
         sentiment=f"NIFTY 50 {nifty.percent_change:+.2f}%",
         recommendations=[
-            _quote_to_recommendation(quotes["NIFTYBEES"], "Core Large Cap ETF", "initiate_sip"),
-            _quote_to_recommendation(quotes["MID150BEES"], "Mid Cap ETF", "execute_buy"),
-            _quote_to_recommendation(quotes["GOLDBEES"], "Gold Hedge ETF", "execute_buy"),
+            _quote_to_recommendation(quote, _category_for_quote(quote), "review_position")
+            for quote in top_candidates
         ],
         projected_acceleration=[
             OverviewStat(
@@ -461,10 +468,38 @@ def get_command_center_briefing() -> CommandCenterResponse:
 
 
 def get_market_quotes(symbols: list[str] | None = None) -> MarketQuoteResponse:
-    requested_symbols = symbols or settings.market_symbols
+    requested_symbols = symbols or get_tracked_symbols()
     quotes = [get_market_quote(symbol) for symbol in requested_symbols]
     as_of = max((quote.last_updated for quote in quotes), default=_iso_now())
     return MarketQuoteResponse(source=_NSE_SOURCE, as_of=as_of, quotes=quotes)
+
+
+def get_market_snapshot() -> MarketSnapshotResponse:
+    snapshot = _load_market_snapshot()
+    if snapshot is not None:
+        return snapshot
+    return refresh_market_snapshot()
+
+
+def refresh_market_snapshot(symbols: list[str] | None = None) -> MarketSnapshotResponse:
+    tracked_symbols = symbols or get_tracked_symbols()
+    quotes = [get_market_quote(symbol) for symbol in tracked_symbols]
+    snapshot = MarketSnapshotResponse(
+        source=_NSE_SOURCE,
+        generated_at=_iso_now(),
+        tracked_symbols=tracked_symbols,
+        quotes=quotes,
+        refresh_interval_seconds=settings.market_refresh_interval_seconds,
+    )
+    _save_market_snapshot(snapshot)
+    logger.info("Refreshed tracked market snapshot for %s symbols", len(tracked_symbols))
+    return snapshot
+
+
+def get_tracked_symbols() -> list[str]:
+    symbols = set(settings.market_symbols)
+    symbols.update(_load_portfolio_holdings().keys())
+    return sorted(symbols)
 
 
 def get_market_quote(symbol: str) -> QuoteSnapshot:
@@ -562,6 +597,18 @@ def _load_portfolio_holdings() -> dict[str, float]:
     return settings.portfolio_holdings
 
 
+def _load_market_snapshot() -> MarketSnapshotResponse | None:
+    if not _MARKET_SNAPSHOT_FILE.exists():
+        return None
+    payload = json.loads(_MARKET_SNAPSHOT_FILE.read_text(encoding="utf-8"))
+    return MarketSnapshotResponse.model_validate(payload)
+
+
+def _save_market_snapshot(snapshot: MarketSnapshotResponse) -> None:
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _MARKET_SNAPSHOT_FILE.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
+
+
 def _save_uploaded_holdings(holdings: dict[str, float]) -> None:
     if not holdings:
         raise ValueError("No valid holdings were found in the uploaded CSV.")
@@ -610,6 +657,15 @@ def _quote_to_recommendation(quote: QuoteSnapshot, category: str, action: str) -
         ),
         action=action,
     )
+
+
+def _category_for_quote(quote: QuoteSnapshot) -> str:
+    name = quote.company_name.upper()
+    if "ETF" in name or "BEES" in quote.symbol:
+        return "ETF"
+    if quote.industry:
+        return quote.industry
+    return "Equity"
 
 
 def _get_index_by_name(name: str) -> IndexSnapshot:

@@ -13,6 +13,7 @@ from .models import (
     MarketIndicesResponse,
     MarketEngineResponse,
     MarketQuoteResponse,
+    MarketSnapshotResponse,
     MarketStatusResponse,
     OverviewResponse,
     SentinelResponse,
@@ -29,6 +30,7 @@ from .services import (
     get_market_indices,
     get_market_quotes,
     get_market_recommendations,
+    get_market_snapshot,
     get_market_status,
     get_overview,
     get_sentinel_alerts,
@@ -65,6 +67,11 @@ def market_indices(index_names: str | None = Query(default=None, description="Co
 @router.get("/market/status", response_model=MarketStatusResponse)
 def market_status() -> MarketStatusResponse:
     return get_market_status()
+
+
+@router.get("/market/snapshot", response_model=MarketSnapshotResponse)
+def market_snapshot() -> MarketSnapshotResponse:
+    return get_market_snapshot()
 
 
 @router.post("/connect/sessions", response_model=ConnectSessionResponse)

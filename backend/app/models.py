@@ -192,6 +192,14 @@ class MarketQuoteResponse(BaseModel):
     quotes: list[QuoteSnapshot]
 
 
+class MarketSnapshotResponse(BaseModel):
+    source: str
+    generated_at: str
+    tracked_symbols: list[str]
+    quotes: list[QuoteSnapshot]
+    refresh_interval_seconds: int
+
+
 class IndexSnapshot(BaseModel):
     index: str
     last: float

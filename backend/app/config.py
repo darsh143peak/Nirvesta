@@ -33,6 +33,7 @@ class Settings(BaseSettings):
         alias="NIRVESTA_PORTFOLIO_HOLDINGS",
     )
     market_cache_ttl_seconds: int = Field(default=60, alias="NIRVESTA_MARKET_CACHE_TTL_SECONDS")
+    market_refresh_interval_seconds: int = Field(default=3600, alias="NIRVESTA_MARKET_REFRESH_INTERVAL_SECONDS")
 
     model_config = SettingsConfigDict(
         env_file=".env",

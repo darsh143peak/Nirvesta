@@ -1,4 +1,4 @@
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile
 
 from .config import get_settings
 from .models import (
@@ -9,7 +9,10 @@ from .models import (
     ConnectSessionRequest,
     ConnectSessionResponse,
     HealthResponse,
+    MarketIndicesResponse,
     MarketEngineResponse,
+    MarketQuoteResponse,
+    MarketStatusResponse,
     OverviewResponse,
     SentinelResponse,
     StrategySimulationRequest,
@@ -21,7 +24,10 @@ from .services import (
     create_connect_session,
     get_auditor_report,
     get_command_center_briefing,
+    get_market_indices,
+    get_market_quotes,
     get_market_recommendations,
+    get_market_status,
     get_overview,
     get_sentinel_alerts,
     respond_to_concierge,
@@ -40,6 +46,23 @@ def healthcheck() -> HealthResponse:
 @router.get("/overview", response_model=OverviewResponse)
 def overview() -> OverviewResponse:
     return get_overview()
+
+
+@router.get("/market/quotes", response_model=MarketQuoteResponse)
+def market_quotes(symbols: str | None = Query(default=None, description="Comma-separated NSE symbols")) -> MarketQuoteResponse:
+    parsed_symbols = [symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()] if symbols else None
+    return get_market_quotes(parsed_symbols)
+
+
+@router.get("/market/indices", response_model=MarketIndicesResponse)
+def market_indices(index_names: str | None = Query(default=None, description="Comma-separated NSE index names")) -> MarketIndicesResponse:
+    parsed_index_names = [index_name.strip() for index_name in index_names.split(",") if index_name.strip()] if index_names else None
+    return get_market_indices(parsed_index_names)
+
+
+@router.get("/market/status", response_model=MarketStatusResponse)
+def market_status() -> MarketStatusResponse:
+    return get_market_status()
 
 
 @router.post("/connect/sessions", response_model=ConnectSessionResponse)

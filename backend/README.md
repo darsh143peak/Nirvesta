@@ -5,6 +5,8 @@ This backend adds two interfaces over the same domain logic:
 - A FastAPI app for the Nirvesta frontend
 - An MCP server for AI agents and copilots
 
+The market endpoints are now backed by live NSE India quote, index, and market-status data. Portfolio-style endpoints derive their values from the configured `NIRVESTA_PORTFOLIO_HOLDINGS` basket plus live NSE prices.
+
 ## Structure
 
 ```text
@@ -29,6 +31,21 @@ uv run uvicorn app.main:app --reload
 
 The API will start on `http://127.0.0.1:8000`.
 
+## Live Data Configuration
+
+Set a watchlist and a default portfolio basket in `.env`:
+
+```bash
+NIRVESTA_MARKET_SYMBOLS=INFY,HDFCBANK,RELIANCE,ITC,SBIN,NIFTYBEES,GOLDBEES,MID150BEES
+NIRVESTA_PORTFOLIO_HOLDINGS=INFY:12,HDFCBANK:18,RELIANCE:8,ITC:150,SBIN:25,NIFTYBEES:80,GOLDBEES:60
+```
+
+New market endpoints:
+
+- `GET /api/v1/market/quotes?symbols=INFY,RELIANCE,NIFTYBEES`
+- `GET /api/v1/market/indices?index_names=NIFTY 50,NIFTY BANK,NIFTY IT`
+- `GET /api/v1/market/status`
+
 ## Run The MCP Server
 
 `stdio` transport works well for local MCP clients:
@@ -47,6 +64,15 @@ NIRVESTA_MCP_TRANSPORT=streamable-http uv run python mcp_server.py
 
 The MCP SDK quick example documents `FastMCP` and the supported transports here:
 https://py.sdk.modelcontextprotocol.io/
+
+The MCP server now exposes NSE-backed tools such as:
+
+- `get_nse_quote`
+- `get_nse_quotes`
+- `get_nse_indices`
+- `get_nse_market_status`
+- `get_market_opportunities`
+- `get_auditor_snapshot`
 
 ## Suggested Frontend Integration
 

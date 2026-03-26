@@ -10,11 +10,20 @@ type NavItem = {
 
 const primaryNav: NavItem[] = [
   { label: "Terminal", href: "/", icon: "terminal" },
+  { label: "DashBoard", href: "/command-center", icon: "dashboard" },
   { label: "Portfolio", href: "/auditor", icon: "account_balance_wallet" },
   { label: "Strategies", href: "/strategy", icon: "query_stats" },
   { label: "Alerts", href: "/sentinel", icon: "notifications_active" },
   { label: "Settings", href: "/connect", icon: "settings" },
 ];
+
+function getPublicNav(items: NavItem[]) {
+  return items.filter((item) => item.label !== "Terminal" && item.label !== "Settings");
+}
+
+function getAuthenticatedNav(items: NavItem[]) {
+  return items.filter((item) => item.label !== "Terminal");
+}
 
 export function TopBar(props: {
   nav?: Array<{ label: string; href: string }>;
@@ -25,7 +34,11 @@ export function TopBar(props: {
 }) {
   const { metricLabel = "Investable Surplus", metricValue = "$42,500.00", rightSlot, withSidebar = true } = props;
   const { isAuthenticated, profile, signOut } = useAuth();
-  const visibleNav = primaryNav.filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect");
+  const visibleNav = isAuthenticated ? getAuthenticatedNav(primaryNav) : getPublicNav(primaryNav);
+
+  if (isAuthenticated) {
+    return null;
+  }
 
   return (
     <header className={`fixed left-0 right-0 top-0 z-50 border-b border-white/5 bg-background/80 px-6 py-4 backdrop-blur-xl ${withSidebar ? "lg:left-64" : ""}`}>
@@ -78,15 +91,16 @@ export function TopBar(props: {
 
 export function Sidebar() {
   const { isAuthenticated } = useAuth();
+  const visibleNav = isAuthenticated ? getAuthenticatedNav(primaryNav) : getPublicNav(primaryNav);
 
   return (
-    <aside className="fixed left-0 top-0 hidden h-screen w-64 flex-col border-r border-white/5 bg-surface-container-lowest px-4 pb-6 pt-24 lg:flex">
+    <aside className="fixed left-0 top-0 hidden h-screen w-64 flex-col border-r border-white/5 bg-surface-container-lowest px-4 pb-6 pt-8 lg:flex">
       <div className="mb-8 px-4">
         <h2 className="text-sm font-bold uppercase tracking-[0.22em] text-white">Wealth Ledger</h2>
         <p className="mt-1 text-[10px] uppercase tracking-[0.22em] text-neutral-500">Autonomous Mode</p>
       </div>
       <nav className="space-y-1">
-        {primaryNav.filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect").map((item) => (
+        {visibleNav.map((item) => (
           <NavLink
             key={item.href}
             to={item.href}
@@ -110,7 +124,7 @@ export function Sidebar() {
 
 export function MobileDock() {
   const { isAuthenticated } = useAuth();
-  const visibleNav = primaryNav.filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect");
+  const visibleNav = isAuthenticated ? getAuthenticatedNav(primaryNav) : getPublicNav(primaryNav);
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-around rounded-t-[2rem] border-t border-white/10 bg-background/90 px-4 py-3 backdrop-blur-xl lg:hidden">
@@ -141,12 +155,14 @@ export function AppShell(props: {
   withSidebar?: boolean;
 }) {
   const { children, metricLabel, metricValue, rightSlot, withSidebar = true } = props;
+  const { isAuthenticated } = useAuth();
+  const hasHeader = !isAuthenticated;
 
   return (
     <div className="min-h-screen bg-background text-on-surface">
       <TopBar metricLabel={metricLabel} metricValue={metricValue} rightSlot={rightSlot} withSidebar={withSidebar} />
       {withSidebar ? <Sidebar /> : null}
-      <main className={`${withSidebar ? "lg:ml-64" : ""} px-6 pb-32 pt-24`}>{children}</main>
+      <main className={`${withSidebar ? "lg:ml-64" : ""} px-6 pb-32 ${hasHeader ? "pt-24" : "pt-8"}`}>{children}</main>
       <MobileDock />
     </div>
   );

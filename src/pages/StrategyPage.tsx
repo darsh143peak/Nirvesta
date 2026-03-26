@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { FormEvent, useState } from "react";
 import { AppShell } from "../components/chrome";
 import { MaterialIcon } from "../components/MaterialIcon";
 import { Panel } from "../components/ui";
@@ -10,9 +10,46 @@ const milestones = [
   { icon: "castle", label: "Projected 2045", title: "Freedom Ledger", subtitle: "", amount: "$4.2M", tone: "white", progress: 5 },
 ] as const;
 
+const suggestedQuestions = [
+  "What if I pause my SIPs for 12 months to buy a car?",
+  "What if I increase my SIP by INR 5,000 after a salary hike?",
+  "What if I want to retire 3 years earlier?",
+] as const;
+
+type StrategyChatMessage = {
+  role: "assistant" | "user";
+  text: string;
+};
+
 export function StrategyPage() {
   const [surplus] = useState(4500);
   const [expense, setExpense] = useState(1500000);
+  const [chatInput, setChatInput] = useState("");
+  const [messages, setMessages] = useState<StrategyChatMessage[]>([
+    {
+      role: "assistant",
+      text: "Ask me any 'What if...' question about your plan. I can estimate how SIP pauses, large expenses, earlier retirement, or higher contributions affect your roadmap.",
+    },
+  ]);
+
+  function submitScenario(question: string) {
+    const trimmedQuestion = question.trim();
+    if (!trimmedQuestion) {
+      return;
+    }
+
+    setMessages((current) => [
+      ...current,
+      { role: "user", text: trimmedQuestion },
+      { role: "assistant", text: buildStrategyResponse(trimmedQuestion, surplus, expense) },
+    ]);
+    setChatInput("");
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    submitScenario(chatInput);
+  }
 
   return (
     <AppShell
@@ -119,6 +156,74 @@ export function StrategyPage() {
 
             <Panel className="p-8">
               <div className="mb-6 flex items-center gap-3">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-tertiary/15 text-tertiary">
+                  <MaterialIcon name="forum" className="text-2xl" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-neutral-500">Strategy Copilot</h4>
+                  <p className="mt-1 text-sm text-on-surface-variant">Ask natural-language what-if questions about your roadmap.</p>
+                </div>
+              </div>
+              <div className="space-y-4">
+                <div className="flex max-h-[280px] flex-col gap-4 overflow-y-auto rounded-[1.5rem] border border-white/5 bg-surface-container-lowest p-4">
+                  {messages.map((message, index) => (
+                    <div key={`${message.role}-${index}`} className={`flex gap-3 ${message.role === "user" ? "justify-end" : ""}`}>
+                      {message.role === "assistant" ? (
+                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-tertiary/15 text-tertiary">
+                          <MaterialIcon name="auto_awesome" className="text-lg" fill />
+                        </div>
+                      ) : null}
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                          message.role === "assistant"
+                            ? "rounded-tl-sm bg-white/5 text-on-surface-variant"
+                            : "rounded-tr-sm bg-white text-on-primary"
+                        }`}
+                      >
+                        {message.text}
+                      </div>
+                      {message.role === "user" ? (
+                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-white text-on-primary">
+                          <MaterialIcon name="person" className="text-lg" fill />
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid gap-2">
+                  {suggestedQuestions.map((question) => (
+                    <button
+                      key={question}
+                      type="button"
+                      onClick={() => submitScenario(question)}
+                      className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-[0.14em] text-on-surface-variant transition hover:border-tertiary/30 hover:text-white"
+                    >
+                      {question}
+                    </button>
+                  ))}
+                </div>
+
+                <form onSubmit={handleSubmit} className="relative">
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(event) => setChatInput(event.target.value)}
+                    placeholder="What if I stop my SIP for 6 months, buy a bike, or retire earlier?"
+                    className="w-full rounded-2xl border border-white/10 bg-surface-container-high py-4 pl-5 pr-20 text-sm text-white outline-none placeholder:text-neutral-600"
+                  />
+                  <button
+                    type="submit"
+                    className="absolute right-2 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl bg-white text-on-primary transition hover:bg-tertiary"
+                  >
+                    <MaterialIcon name="arrow_upward" className="text-lg" />
+                  </button>
+                </form>
+              </div>
+            </Panel>
+
+            <Panel className="p-8">
+              <div className="mb-6 flex items-center gap-3">
                 <MaterialIcon name="model_training" className="text-secondary" />
                 <h4 className="text-xs font-bold uppercase tracking-[0.2em] text-neutral-500">Simulate Life Events</h4>
               </div>
@@ -155,4 +260,54 @@ export function StrategyPage() {
       </div>
     </AppShell>
   );
+}
+
+function buildStrategyResponse(question: string, monthlySurplus: number, expense: number) {
+  const normalized = question.toLowerCase();
+  const detectedAmount = parseFinancialAmount(normalized) ?? expense;
+  const expenseInLakhs = (detectedAmount / 100000).toFixed(1);
+  const monthlyBoost = Math.round(monthlySurplus * 0.2);
+
+  if (normalized.includes("pause") || normalized.includes("stop sip") || normalized.includes("stop my sip")) {
+    return `Pausing SIPs while taking on an expense of about INR ${detectedAmount.toLocaleString("en-IN")} would likely delay your next milestone by 8 to 14 months. I would preserve at least one core SIP and reduce satellite allocations first, so your long-term compounding engine keeps running.`;
+  }
+
+  if (normalized.includes("increase sip") || normalized.includes("salary hike") || normalized.includes("raise my sip")) {
+    return `If you increase your SIP by INR ${monthlyBoost.toLocaleString("en-IN")} to ${(
+      monthlySurplus + monthlyBoost
+    ).toLocaleString("en-IN")} per month, your roadmap should steepen noticeably. The marriage and house goals would likely accelerate first, and your retirement projection can improve by roughly 1 to 2 years if you sustain that increase.`;
+  }
+
+  if (normalized.includes("retire") || normalized.includes("retirement")) {
+    return `An earlier retirement target compresses the plan, so the portfolio needs either a higher monthly contribution or a slightly more aggressive allocation. If you want to retire 3 years earlier, I would test a 15% to 25% SIP increase before raising risk, because contribution upgrades are usually the cleanest lever.`;
+  }
+
+  if (normalized.includes("house") || normalized.includes("home") || normalized.includes("marriage")) {
+    return `For a goal-linked expense around INR ${detectedAmount.toLocaleString("en-IN")}, I would split the impact across liquidity and timeline. Funding ${expenseInLakhs} lakhs from your current surplus alone would slow the house and marriage buckets, so the safer move is to carve out a dedicated short-term sleeve rather than interrupt every SIP.`;
+  }
+
+  if (normalized.includes("car") || normalized.includes("bike") || normalized.includes("suv")) {
+    return `A vehicle purchase in the INR ${detectedAmount.toLocaleString("en-IN")} range is manageable, but it becomes expensive if it forces a full SIP stop. My recommendation is to limit the pause to 3 to 6 months, keep your core index SIP alive, and let discretionary goals absorb most of the adjustment.`;
+  }
+
+  return `If that scenario happens, I would first protect your essential SIP base of INR ${monthlySurplus.toLocaleString("en-IN")} and only then re-sequence optional goals. Give me the amount, timeline, or goal name, and I can make the projection more specific.`;
+}
+
+function parseFinancialAmount(question: string) {
+  const lakhMatch = question.match(/(\d+(?:\.\d+)?)\s*lakh/);
+  if (lakhMatch) {
+    return Number(lakhMatch[1]) * 100000;
+  }
+
+  const croreMatch = question.match(/(\d+(?:\.\d+)?)\s*crore/);
+  if (croreMatch) {
+    return Number(croreMatch[1]) * 10000000;
+  }
+
+  const inrMatch = question.match(/inr\s*([\d,]+)/);
+  if (inrMatch) {
+    return Number(inrMatch[1].split(",").join(""));
+  }
+
+  return null;
 }

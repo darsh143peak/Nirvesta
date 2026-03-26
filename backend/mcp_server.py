@@ -5,7 +5,11 @@ from app.services import (
     create_connect_session,
     get_auditor_report,
     get_command_center_briefing,
+    get_market_indices,
+    get_market_quote,
+    get_market_quotes,
     get_market_recommendations,
+    get_market_status,
     get_overview,
     get_sentinel_alerts,
     respond_to_concierge,
@@ -21,6 +25,12 @@ mcp = FastMCP("Nirvesta MCP", json_response=True)
 def overview_resource() -> dict:
     """Return the current dashboard overview snapshot."""
     return get_overview().model_dump()
+
+
+@mcp.resource("nirvesta://nse/market-status")
+def market_status_resource() -> dict:
+    """Return the latest NSE market status payload."""
+    return get_market_status().model_dump()
 
 
 @mcp.tool()
@@ -80,6 +90,32 @@ def simulate_wealth_strategy(
 def get_market_opportunities() -> dict:
     """Return current market-engine recommendations and milestone acceleration estimates."""
     return get_market_recommendations().model_dump()
+
+
+@mcp.tool()
+def get_nse_quote(symbol: str) -> dict:
+    """Return a live NSE quote snapshot for a single symbol."""
+    return get_market_quote(symbol).model_dump()
+
+
+@mcp.tool()
+def get_nse_quotes(symbols: str = "") -> dict:
+    """Return live NSE quote snapshots for a comma-separated symbol list."""
+    parsed_symbols = [symbol.strip().upper() for symbol in symbols.split(",") if symbol.strip()] or None
+    return get_market_quotes(parsed_symbols).model_dump()
+
+
+@mcp.tool()
+def get_nse_indices(index_names: str = "") -> dict:
+    """Return NSE index snapshots for a comma-separated list of index names."""
+    parsed_names = [name.strip() for name in index_names.split(",") if name.strip()] or None
+    return get_market_indices(parsed_names).model_dump()
+
+
+@mcp.tool()
+def get_nse_market_status() -> dict:
+    """Return the latest NSE market status snapshot."""
+    return get_market_status().model_dump()
 
 
 @mcp.tool()

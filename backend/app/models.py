@@ -12,7 +12,7 @@ class HealthResponse(BaseModel):
 class OverviewStat(BaseModel):
     label: str
     value: str
-    tone: Literal["neutral", "positive", "warning"]
+    tone: Literal["neutral", "positive", "warning", "negative"]
 
 
 class OverviewResponse(BaseModel):
@@ -91,9 +91,10 @@ class StrategySimulationResponse(BaseModel):
 class Recommendation(BaseModel):
     symbol: str
     category: str
-    monthly_sip: str
+    last_price: float
+    percent_change: float
+    last_updated: str
     thesis: str
-    expense_ratio: str
     action: str
 
 
@@ -130,7 +131,7 @@ class AuditHolding(BaseModel):
 class AuditRecommendation(BaseModel):
     current_holding: str
     suggested_holding: str
-    annual_savings: str
+    expected_benefit: str
     reason: str
 
 
@@ -154,3 +155,59 @@ class CommandCenterResponse(BaseModel):
     headlines: list[str]
     signals: list[CommandSignal]
     execution_summary: dict[str, str]
+
+
+class QuoteSnapshot(BaseModel):
+    symbol: str
+    company_name: str
+    industry: str | None = None
+    last_price: float
+    change: float
+    percent_change: float
+    previous_close: float
+    open_price: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    year_high: float | None = None
+    year_low: float | None = None
+    last_updated: str
+    source: str
+
+
+class MarketQuoteResponse(BaseModel):
+    source: str
+    as_of: str
+    quotes: list[QuoteSnapshot]
+
+
+class IndexSnapshot(BaseModel):
+    index: str
+    last: float
+    change: float
+    percent_change: float
+    advances: int | None = None
+    declines: int | None = None
+    previous_day: str | None = None
+    source: str
+
+
+class MarketIndicesResponse(BaseModel):
+    source: str
+    as_of: str
+    indices: list[IndexSnapshot]
+
+
+class MarketStatusItem(BaseModel):
+    market: str
+    status: str
+    trade_date: str
+    index: str | None = None
+    last: float | None = None
+    variation: float | None = None
+    percent_change: float | None = None
+    message: str
+
+
+class MarketStatusResponse(BaseModel):
+    source: str
+    market_state: list[MarketStatusItem]

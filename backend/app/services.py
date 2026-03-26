@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from typing import BinaryIO
+import json
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from math import sqrt
+from time import time
+from typing import Any, BinaryIO
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
+from .config import get_settings
 from .models import (
     AlertItem,
     AuditHolding,
@@ -16,9 +23,15 @@ from .models import (
     ConciergeOption,
     ConnectSessionRequest,
     ConnectSessionResponse,
+    IndexSnapshot,
     MarketEngineResponse,
+    MarketIndicesResponse,
+    MarketQuoteResponse,
+    MarketStatusItem,
+    MarketStatusResponse,
     OverviewResponse,
     OverviewStat,
+    QuoteSnapshot,
     Recommendation,
     SentinelResponse,
     StrategyMilestone,
@@ -27,16 +40,76 @@ from .models import (
     UploadPortfolioResponse,
 )
 
+settings = get_settings()
+_CACHE: dict[str, tuple[float, Any]] = {}
+_NSE_SOURCE = "NSE India public market endpoints"
+
+
+@dataclass
+class PortfolioPosition:
+    symbol: str
+    quantity: float
+    quote: QuoteSnapshot
+
+    @property
+    def market_value(self) -> float:
+        return self.quantity * self.quote.last_price
+
+    @property
+    def day_change_value(self) -> float:
+        return self.quantity * self.quote.change
+
+    @property
+    def volatility_proxy(self) -> float:
+        if not self.quote.year_high or not self.quote.year_low or not self.quote.last_price:
+            return 0.0
+        return ((self.quote.year_high - self.quote.year_low) / self.quote.last_price) * 100
+
 
 def get_overview() -> OverviewResponse:
+    positions = _get_portfolio_positions()
+    total_value = sum(position.market_value for position in positions)
+    total_day_change = sum(position.day_change_value for position in positions)
+    market_status = get_market_status()
+    breadth = _get_index_by_name("NIFTY 50")
+    down_alerts = sum(1 for position in positions if position.quote.percent_change <= -1.5)
+
+    largest_weight = max((position.market_value / total_value for position in positions), default=0)
+    if largest_weight > 0.3:
+        risk_profile = "Moderately Concentrated NSE Basket"
+    elif largest_weight > 0.2:
+        risk_profile = "Balanced Growth Basket"
+    else:
+        risk_profile = "Diversified NSE Basket"
+
+    capital_market = next((item for item in market_status.market_state if item.market == "Capital Market"), None)
+    market_label = capital_market.status if capital_market else "Unknown"
+
     return OverviewResponse(
-        total_portfolio_value="INR 12,40,000",
+        total_portfolio_value=_format_inr(total_value),
         monthly_surplus="INR 4,500",
-        risk_profile="Balanced Growth Seeker",
+        risk_profile=risk_profile,
         stats=[
-            OverviewStat(label="Goal Health", value="94%", tone="positive"),
-            OverviewStat(label="Portfolio Drift", value="0.02%", tone="neutral"),
-            OverviewStat(label="Watch Alerts", value="2 critical", tone="warning"),
+            OverviewStat(
+                label="Day P&L",
+                value=f"{total_day_change:+,.2f} INR",
+                tone="positive" if total_day_change >= 0 else "negative",
+            ),
+            OverviewStat(
+                label="NIFTY 50",
+                value=f"{breadth.last:,.2f} ({breadth.percent_change:+.2f}%)",
+                tone="positive" if breadth.percent_change >= 0 else "negative",
+            ),
+            OverviewStat(
+                label="Market State",
+                value=market_label,
+                tone="warning" if market_label.lower() != "open" else "neutral",
+            ),
+            OverviewStat(
+                label="Watch Alerts",
+                value=f"{down_alerts} movers below -1.5%",
+                tone="warning" if down_alerts else "neutral",
+            ),
         ],
     )
 
@@ -68,8 +141,8 @@ def analyze_uploaded_portfolio(filename: str, file_obj: BinaryIO) -> UploadPortf
         detected_format=detected_format,
         holdings_detected=holdings_detected,
         notes=[
-            "Portfolio artifact queued for normalization.",
-            "Instrument mapping will be enriched with exchange metadata.",
+            "Portfolio artifact accepted for normalization.",
+            "Replace the default portfolio holdings env var once you persist uploaded positions.",
         ],
     )
 
@@ -107,6 +180,9 @@ def respond_to_concierge(payload: ConciergeMessageRequest) -> ConciergeMessageRe
 
 
 def simulate_strategy(payload: StrategySimulationRequest) -> StrategySimulationResponse:
+    breadth = _get_index_by_name("NIFTY 50")
+    bullish_market = breadth.percent_change >= 0
+
     base_split = {
         "equity": 0.55,
         "debt": 0.2,
@@ -119,11 +195,19 @@ def simulate_strategy(payload: StrategySimulationRequest) -> StrategySimulationR
         base_split = {"equity": 0.7, "debt": 0.1, "gold": 0.05, "international": 0.15}
 
     retirement_age = 42 if payload.risk_mode != "conservative" else 45
-    wealth_at_fifty = "USD 12.4M" if payload.risk_mode == "aggressive" else "USD 9.1M"
-    summary = f"Using a {payload.risk_mode} plan, the engine allocates your surplus across four sleeves."
+    wealth_multiplier = 2500 if payload.risk_mode == "aggressive" else 1900
+    wealth_value = payload.monthly_surplus * wealth_multiplier
+    if not bullish_market:
+        wealth_value *= 0.95
+
+    summary = (
+        f"Using a {payload.risk_mode} plan against a NIFTY 50 move of {breadth.percent_change:+.2f}%, "
+        "the engine allocates your surplus across four sleeves."
+    )
 
     if payload.event:
         retirement_age += 1 if payload.event.amount > 1_000_000 else 0
+        wealth_value -= payload.event.amount * 0.15
         summary += (
             f" The event '{payload.event.label}' temporarily slows milestone velocity because it absorbs "
             f"{payload.event.amount:,.0f} of deployable capital."
@@ -132,156 +216,328 @@ def simulate_strategy(payload: StrategySimulationRequest) -> StrategySimulationR
     return StrategySimulationResponse(
         recommended_split=base_split,
         projected_retirement_age=retirement_age,
-        wealth_at_fifty=wealth_at_fifty,
+        wealth_at_fifty=_format_inr(max(wealth_value, 0)),
         risk_sensitivity="Medium-High" if payload.risk_mode != "conservative" else "Moderate",
         milestones=[
-            StrategyMilestone(title="Marriage Fund", target_year=2026, target_amount="USD 45,000", status="on_track"),
-            StrategyMilestone(title="Coastal Residence", target_year=2030, target_amount="USD 280,000", status="building"),
-            StrategyMilestone(title="Freedom Ledger", target_year=2045, target_amount="USD 4.2M", status="seeded"),
+            StrategyMilestone(title="Marriage Fund", target_year=2026, target_amount="INR 45,00,000", status="on_track"),
+            StrategyMilestone(title="Coastal Residence", target_year=2030, target_amount="INR 2,80,00,000", status="building"),
+            StrategyMilestone(title="Freedom Ledger", target_year=2045, target_amount="INR 42,00,00,000", status="seeded"),
         ],
         summary=summary,
     )
 
 
 def get_market_recommendations() -> MarketEngineResponse:
+    quotes = {quote.symbol: quote for quote in get_market_quotes(["NIFTYBEES", "MID150BEES", "GOLDBEES"]).quotes}
+    indices = get_market_indices(["NIFTY 50", "NIFTY BANK", "NIFTY IT"]).indices
+    nifty = next(index for index in indices if index.index == "NIFTY 50")
+
     return MarketEngineResponse(
-        sentiment="Bullish +2.4%",
+        sentiment=f"NIFTY 50 {nifty.percent_change:+.2f}%",
         recommendations=[
-            Recommendation(
-                symbol="GOLDBEES",
-                category="Commodity",
-                monthly_sip="USD 2,450",
-                thesis="Gold exposure helps offset rate and currency volatility in the current regime.",
-                expense_ratio="0.04%",
-                action="execute_buy",
-            ),
-            Recommendation(
-                symbol="NIFTYBEES",
-                category="Equity: Large Cap",
-                monthly_sip="USD 4,200",
-                thesis="Core large-cap exposure supports milestone compounding with lower tracking drift.",
-                expense_ratio="0.05%",
-                action="initiate_sip",
-            ),
-            Recommendation(
-                symbol="MID150BEES",
-                category="Equity: Mid Cap",
-                monthly_sip="USD 1,850",
-                thesis="Mid-cap participation adds measured growth torque for long-dated goals.",
-                expense_ratio="0.21%",
-                action="execute_buy",
-            ),
+            _quote_to_recommendation(quotes["NIFTYBEES"], "Core Large Cap ETF", "initiate_sip"),
+            _quote_to_recommendation(quotes["MID150BEES"], "Mid Cap ETF", "execute_buy"),
+            _quote_to_recommendation(quotes["GOLDBEES"], "Gold Hedge ETF", "execute_buy"),
         ],
         projected_acceleration=[
-            OverviewStat(label="Retirement", value="-2 years", tone="positive"),
-            OverviewStat(label="Education", value="-8 months", tone="positive"),
-            OverviewStat(label="Leisure Fund", value="On Track", tone="neutral"),
+            OverviewStat(
+                label=index.index,
+                value=f"{index.percent_change:+.2f}%",
+                tone="positive" if index.percent_change >= 0 else "negative",
+            )
+            for index in indices
         ],
     )
 
 
 def get_sentinel_alerts() -> SentinelResponse:
+    positions = sorted(_get_portfolio_positions(), key=lambda position: position.quote.percent_change)
+    total_value = sum(position.market_value for position in positions) or 1
+    aggregate_percent = (sum(position.day_change_value for position in positions) / total_value) * 100
+    largest_weight = max((position.market_value / total_value for position in positions), default=0)
+    worst_move = abs(positions[0].quote.percent_change) if positions else 0
+    vulnerability_score = min(99, round((largest_weight * 55) + worst_move * 6))
+
+    alerts = [
+        AlertItem(
+            timestamp_utc=position.quote.last_updated,
+            headline=(
+                f"{position.quote.company_name} ({position.symbol}) moved "
+                f"{position.quote.percent_change:+.2f}% and now sits at INR {position.quote.last_price:,.2f}."
+            ),
+            impact=f"{position.quote.percent_change:+.2f}%",
+            severity=_severity_from_percent(position.quote.percent_change),
+            action="rebalance_now" if position.quote.percent_change < -1 else "monitor",
+        )
+        for position in positions[:3]
+    ]
+
     return SentinelResponse(
-        vulnerability_score=88,
-        aggregate_impact="-0.82% (USD 14,402)",
+        vulnerability_score=vulnerability_score,
+        aggregate_impact=f"{aggregate_percent:+.2f}% ({_format_inr(sum(position.day_change_value for position in positions))})",
         auto_mitigation_ready=True,
-        alerts=[
-            AlertItem(
-                timestamp_utc=_minutes_ago_iso(5),
-                headline="Singapore logistics disruption increases tech and shipping risk.",
-                impact="-4.2%",
-                severity="critical",
-                action="rebalance_now",
-            ),
-            AlertItem(
-                timestamp_utc=_minutes_ago_iso(42),
-                headline="Nordic clean energy uptime boost improves renewable manufacturers.",
-                impact="+2.8%",
-                severity="medium",
-                action="analyze_exposure",
-            ),
-            AlertItem(
-                timestamp_utc=_minutes_ago_iso(111),
-                headline="Commodities signal remains neutral after lunar mining headline.",
-                impact="neutral",
-                severity="low",
-                action="monitor",
-            ),
-        ],
+        alerts=alerts,
     )
 
 
 def get_auditor_report() -> AuditorResponse:
+    positions = sorted(_get_portfolio_positions(), key=lambda position: position.market_value, reverse=True)
+    total_value = sum(position.market_value for position in positions) or 1
+    weights = [position.market_value / total_value for position in positions]
+    concentration = sum(weight * weight for weight in weights)
+    diversification_score = max(1, min(100, round((1 - concentration) * 130)))
+
+    most_volatile = max(positions, key=lambda position: position.volatility_proxy)
+    holdings = [
+        AuditHolding(
+            symbol=position.symbol,
+            name=position.quote.company_name,
+            badge=_audit_badge(position),
+            volatility_impact=min(99, round(position.volatility_proxy)),
+            market_value=_format_inr(position.market_value),
+            performance=f"{position.quote.percent_change:+.2f}%",
+        )
+        for position in positions[:6]
+    ]
+
     return AuditorResponse(
-        diversification_score=82,
-        annualized_risk_trend=[40, 65, 30, 50, 20, 90, 45, 60, 75, 35],
+        diversification_score=diversification_score,
+        annualized_risk_trend=[min(100, round(position.volatility_proxy)) for position in positions[:6]],
         recommendation=AuditRecommendation(
-            current_holding="Gold ETF A",
-            suggested_holding="Gold ETF B",
-            annual_savings="USD 1,240",
-            reason="Lower expense ratio with similar tracking quality improves long-run fee drag.",
+            current_holding=most_volatile.symbol,
+            suggested_holding="NIFTYBEES" if most_volatile.symbol != "NIFTYBEES" else "GOLDBEES",
+            expected_benefit="Lower concentration and smoother benchmark-like participation",
+            reason=(
+                f"{most_volatile.symbol} currently shows the widest 52-week price band in your configured basket, "
+                "so trimming it reduces concentration risk without exiting the market."
+            ),
         ),
-        holdings=[
-            AuditHolding(
-                symbol="AAPL",
-                name="Apple Inc.",
-                badge="High Expense Ratio",
-                volatility_impact=64,
-                market_value="USD 12,450",
-                performance="+4.2%",
-            ),
-            AuditHolding(
-                symbol="TSLA",
-                name="Tesla, Inc.",
-                badge="Efficient Holding",
-                volatility_impact=88,
-                market_value="USD 8,210",
-                performance="-2.1%",
-            ),
-            AuditHolding(
-                symbol="VTI",
-                name="Vanguard Total Stock Market ETF",
-                badge="Overlap Detected",
-                volatility_impact=12,
-                market_value="USD 45,000",
-                performance="+1.8%",
-            ),
-        ],
+        holdings=holdings,
     )
 
 
 def get_command_center_briefing() -> CommandCenterResponse:
+    indices = get_market_indices(["NIFTY 50", "NIFTY BANK", "NIFTY IT", "NIFTY AUTO"]).indices
+    positions = sorted(_get_portfolio_positions(), key=lambda position: position.quote.percent_change)
+    best = max(positions, key=lambda position: position.quote.percent_change)
+    worst = min(positions, key=lambda position: position.quote.percent_change)
+
     return CommandCenterResponse(
         headlines=[
-            "RBI raises repo rate by 25bps",
-            "Tesla quarterly earnings beat consensus",
-            "Crude inventory surprise pressures transport names",
+            f"{index.index} {index.percent_change:+.2f}% at {index.last:,.2f}" for index in indices[:3]
         ],
         signals=[
             CommandSignal(
-                priority="high",
-                title="Taiwan Semiconductor Recovery Spike",
-                asset="TATA MOTORS",
-                target="+5.0% TARGET",
-                reasoning="Input cost relief may improve EV margins over the next quarter.",
+                priority="high" if worst.quote.percent_change < -1 else "medium",
+                title=f"{worst.symbol} is the weakest holding today",
+                asset=worst.symbol,
+                target="Reduce concentration risk",
+                reasoning=(
+                    f"{worst.quote.company_name} is down {worst.quote.percent_change:+.2f}% versus the basket, "
+                    "which makes it the clearest rebalance candidate."
+                ),
                 action="rebalance_portfolio_now",
             ),
             CommandSignal(
                 priority="medium",
-                title="European Green Deal Expansion",
-                asset="SIEMENS ENERGY",
-                target="+3.2% TARGET",
-                reasoning="Fresh subsidies could pull forward contract wins and revenue visibility.",
+                title=f"{best.symbol} is leading your watchlist",
+                asset=best.symbol,
+                target="Review profit-lock or SIP continuation",
+                reasoning=(
+                    f"{best.quote.company_name} is trading at INR {best.quote.last_price:,.2f}, "
+                    f"up {best.quote.percent_change:+.2f}% on the day."
+                ),
                 action="analyze_exposure",
             ),
         ],
         execution_summary={
-            "goal_health": "94%",
-            "hedge_slippage": "0.12%",
-            "execution_fee": "USD 0.00 (Zenith Tier)",
+            "market_status": get_market_status().market_state[0].status,
+            "watchlist_leader": f"{best.symbol} {best.quote.percent_change:+.2f}%",
+            "watchlist_laggard": f"{worst.symbol} {worst.quote.percent_change:+.2f}%",
         },
     )
 
 
-def _minutes_ago_iso(minutes: int) -> str:
-    return (datetime.now(tz=UTC) - timedelta(minutes=minutes)).isoformat()
+def get_market_quotes(symbols: list[str] | None = None) -> MarketQuoteResponse:
+    requested_symbols = symbols or settings.market_symbols
+    quotes = [get_market_quote(symbol) for symbol in requested_symbols]
+    as_of = max((quote.last_updated for quote in quotes), default=_iso_now())
+    return MarketQuoteResponse(source=_NSE_SOURCE, as_of=as_of, quotes=quotes)
+
+
+def get_market_quote(symbol: str) -> QuoteSnapshot:
+    normalized_symbol = symbol.strip().upper()
+    cache_key = f"quote:{normalized_symbol}"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    payload = _fetch_json(f"{settings.nse_base_url}/quote-equity?symbol={quote(normalized_symbol)}", cache_key)
+    quote_snapshot = QuoteSnapshot(
+        symbol=normalized_symbol,
+        company_name=payload["info"]["companyName"],
+        industry=payload["info"].get("industry"),
+        last_price=float(payload["priceInfo"]["lastPrice"]),
+        change=float(payload["priceInfo"]["change"]),
+        percent_change=float(payload["priceInfo"]["pChange"]),
+        previous_close=float(payload["priceInfo"]["previousClose"]),
+        open_price=_maybe_float(payload["priceInfo"].get("open")),
+        day_high=_maybe_float(payload["priceInfo"].get("intraDayHighLow", {}).get("max")),
+        day_low=_maybe_float(payload["priceInfo"].get("intraDayHighLow", {}).get("min")),
+        year_high=_maybe_float(payload["priceInfo"].get("weekHighLow", {}).get("max")),
+        year_low=_maybe_float(payload["priceInfo"].get("weekHighLow", {}).get("min")),
+        last_updated=payload.get("metadata", {}).get("lastUpdateTime", _iso_now()),
+        source=_NSE_SOURCE,
+    )
+    _set_cached(cache_key, quote_snapshot)
+    return quote_snapshot
+
+
+def get_market_indices(index_names: list[str] | None = None) -> MarketIndicesResponse:
+    cache_key = "indices:all"
+    payload = _get_cached(cache_key)
+    if payload is None:
+        payload = _fetch_json(f"{settings.nse_base_url}/allIndices", cache_key)
+        _set_cached(cache_key, payload)
+
+    index_rows = payload["data"]
+    if index_names:
+        wanted = {name.upper() for name in index_names}
+        index_rows = [row for row in index_rows if row["index"].upper() in wanted]
+
+    indices = [
+        IndexSnapshot(
+            index=row["index"],
+            last=float(row["last"]),
+            change=float(row["variation"]),
+            percent_change=float(row["percentChange"]),
+            advances=_maybe_int(row.get("advances")),
+            declines=_maybe_int(row.get("declines")),
+            previous_day=row.get("previousDay"),
+            source=_NSE_SOURCE,
+        )
+        for row in index_rows
+    ]
+    return MarketIndicesResponse(source=_NSE_SOURCE, as_of=payload.get("timestamp", _iso_now()), indices=indices)
+
+
+def get_market_status() -> MarketStatusResponse:
+    cache_key = "market-status"
+    payload = _get_cached(cache_key)
+    if payload is None:
+        payload = _fetch_json(f"{settings.nse_base_url}/marketStatus", cache_key)
+        _set_cached(cache_key, payload)
+
+    return MarketStatusResponse(
+        source=_NSE_SOURCE,
+        market_state=[
+            MarketStatusItem(
+                market=row["market"],
+                status=row["marketStatus"],
+                trade_date=row["tradeDate"],
+                index=row.get("index") or None,
+                last=_maybe_float(row.get("last")),
+                variation=_maybe_float(row.get("variation")),
+                percent_change=_maybe_float(row.get("percentChange")),
+                message=row.get("marketStatusMessage", ""),
+            )
+            for row in payload.get("marketState", [])
+        ],
+    )
+
+
+def _get_portfolio_positions() -> list[PortfolioPosition]:
+    positions: list[PortfolioPosition] = []
+    for symbol, quantity in settings.portfolio_holdings.items():
+        positions.append(PortfolioPosition(symbol=symbol, quantity=quantity, quote=get_market_quote(symbol)))
+    return positions
+
+
+def _quote_to_recommendation(quote: QuoteSnapshot, category: str, action: str) -> Recommendation:
+    return Recommendation(
+        symbol=quote.symbol,
+        category=category,
+        last_price=quote.last_price,
+        percent_change=quote.percent_change,
+        last_updated=quote.last_updated,
+        thesis=(
+            f"{quote.company_name} is trading at INR {quote.last_price:,.2f} "
+            f"with a day move of {quote.percent_change:+.2f}%."
+        ),
+        action=action,
+    )
+
+
+def _get_index_by_name(name: str) -> IndexSnapshot:
+    indices = get_market_indices([name]).indices
+    if not indices:
+        raise RuntimeError(f"Index '{name}' was not returned by NSE")
+    return indices[0]
+
+
+def _severity_from_percent(percent_change: float) -> str:
+    if percent_change <= -3:
+        return "critical"
+    if percent_change <= -1.5:
+        return "high"
+    if percent_change < 0:
+        return "medium"
+    return "low"
+
+
+def _audit_badge(position: PortfolioPosition) -> str:
+    if position.volatility_proxy >= 35:
+        return "High Range"
+    if position.quote.percent_change >= 1:
+        return "Momentum Leader"
+    return "Core Holding"
+
+
+def _fetch_json(url: str, cache_key: str) -> Any:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Referer": settings.nse_referer,
+        },
+    )
+    with urlopen(request, timeout=20) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    _set_cached(cache_key, payload)
+    return payload
+
+
+def _get_cached(key: str) -> Any | None:
+    entry = _CACHE.get(key)
+    if not entry:
+        return None
+    expires_at, value = entry
+    if expires_at < time():
+        _CACHE.pop(key, None)
+        return None
+    return value
+
+
+def _set_cached(key: str, value: Any) -> None:
+    _CACHE[key] = (time() + settings.market_cache_ttl_seconds, value)
+
+
+def _maybe_float(value: Any) -> float | None:
+    if value in (None, "", "-"):
+        return None
+    return float(value)
+
+
+def _maybe_int(value: Any) -> int | None:
+    if value in (None, "", "-"):
+        return None
+    return int(value)
+
+
+def _format_inr(value: float) -> str:
+    return f"INR {value:,.2f}"
+
+
+def _iso_now() -> str:
+    return datetime.now(tz=UTC).isoformat()

@@ -1,118 +1,331 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { AppShell } from "../components/chrome";
 import { MaterialIcon } from "../components/MaterialIcon";
 import { Panel } from "../components/ui";
 
 const zenithPurple = "#7c5cff";
-const healthMetrics = [
-  { label: "Diversification", value: 82 },
-  { label: "Tax Efficiency", value: 69 },
-  { label: "Risk vs Reward", value: 74 },
-  { label: "Goal Alignment", value: 88 },
-  { label: "Low Fees", value: 64 },
-] as const;
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
+const sectorIndexNames = ["NIFTY IT", "NIFTY PHARMA", "NIFTY BANK", "NIFTY AUTO", "NIFTY FMCG", "NIFTY ENERGY"];
 
-const rebalanceData = [
-  { label: "Equity", actual: 47, target: 42, color: "#76f7bf" },
-  { label: "Debt", actual: 18, target: 25, color: "#9dc1ff" },
-  { label: "Gold", actual: 12, target: 10, color: "#ffb95f" },
-  { label: "International", actual: 23, target: 23, color: zenithPurple },
-] as const;
+type OverviewStat = {
+  label: string;
+  value: string;
+  tone: "neutral" | "positive" | "warning" | "negative";
+};
 
-const scatterPoints = [
-  { label: "HDFCBANK", risk: 34, returns: 62, tone: "steady" },
-  { label: "NIFTYBEES", risk: 28, returns: 58, tone: "steady" },
-  { label: "TATAMOTORS", risk: 76, returns: 68, tone: "star" },
-  { label: "PAYTM", risk: 84, returns: 31, tone: "slacker" },
-  { label: "MID150BEES", risk: 63, returns: 73, tone: "star" },
-  { label: "GOLDBEES", risk: 21, returns: 45, tone: "steady" },
-] as const;
+type OverviewResponse = {
+  total_portfolio_value: string;
+  monthly_surplus: string;
+  risk_profile: string;
+  stats: OverviewStat[];
+};
 
-const waterfallData = [
-  { label: "Starting Balance", value: 620000, tone: "neutral" },
-  { label: "Monthly SIPs", value: 290000, tone: "positive" },
-  { label: "Market Gains", value: 188000, tone: "positive" },
-  { label: "Taxes & Fees", value: -58000, tone: "negative" },
-  { label: "Current Value", value: 1040000, tone: "total" },
-] as const;
+type StrategySimulationResponse = {
+  recommended_split: Record<string, number>;
+  projected_retirement_age: number;
+  wealth_at_fifty: string;
+  risk_sensitivity: string;
+  summary: string;
+};
 
-const taxHarvestData = [
-  { label: "INFY", gains: 8600, losses: 0, harvest: false },
-  { label: "PAYTM", gains: 0, losses: 12400, harvest: true },
-  { label: "ZOMATO", gains: 9200, losses: 0, harvest: false },
-  { label: "NYKAA", gains: 0, losses: 9800, harvest: true },
-  { label: "POLICYBZR", gains: 4200, losses: 0, harvest: false },
-] as const;
+type AuditHolding = {
+  symbol: string;
+  name: string;
+  badge: string;
+  volatility_impact: number;
+  market_value: string;
+  performance: string;
+};
 
-const microInsights = [
-  "Gold ETFs just crossed their 200-day moving average. Good time to hold.",
-  "You have reached 40% of your Goa House goal. You are 3 months ahead of schedule.",
-  "Your large-cap sleeve is absorbing volatility better than the benchmark this week.",
-  "A tax-loss pairing is available between PAYTM and NYKAA to soften your realized gains.",
-] as const;
+type AuditorResponse = {
+  diversification_score: number;
+  annualized_risk_trend: number[];
+  recommendation: {
+    current_holding: string;
+    suggested_holding: string;
+    expected_benefit: string;
+    reason: string;
+  };
+  holdings: AuditHolding[];
+};
 
-const executionActions = [
-  { title: "Rebalance Portfolio", subtitle: "Est. savings: INR 1,200", icon: "sync_alt" },
-  { title: "Harvest INR 4,000 Tax Loss", subtitle: "Offsets current gains", icon: "receipt_long" },
-  { title: "Increase SIP by INR 500", subtitle: "Matches projected salary hike", icon: "trending_up" },
-] as const;
+type SentinelAlert = {
+  timestamp_utc: string;
+  headline: string;
+  impact: string;
+  severity: "low" | "medium" | "high" | "critical";
+  action: string;
+};
 
-const sectorHeatmap = [
-  { label: "IT", value: "+1.8%", tone: "gain" },
-  { label: "Pharma", value: "+0.6%", tone: "gain" },
-  { label: "Banking", value: "-0.9%", tone: "loss" },
-  { label: "Auto", value: "+2.1%", tone: "gain" },
-  { label: "FMCG", value: "-0.3%", tone: "loss" },
-  { label: "Energy", value: "+1.2%", tone: "gain" },
-] as const;
+type SentinelResponse = {
+  vulnerability_score: number;
+  aggregate_impact: string;
+  auto_mitigation_ready: boolean;
+  alerts: SentinelAlert[];
+};
+
+type CommandCenterResponse = {
+  headlines: string[];
+  signals: Array<{
+    priority: string;
+    title: string;
+    asset: string;
+    target: string;
+    reasoning: string;
+    action: string;
+  }>;
+  execution_summary: Record<string, string>;
+};
+
+type MarketIndexResponse = {
+  indices: Array<{
+    index: string;
+    last: number;
+    change: number;
+    percent_change: number;
+  }>;
+};
 
 export function CommandCenterPage() {
   const { profile } = useAuth();
   const [sipAmount, setSipAmount] = useState(profile?.monthly_investable_surplus ?? 4500);
   const [retirementAge, setRetirementAge] = useState(52);
-  const hasPortfolio = Boolean(profile?.monthly_investable_surplus && profile?.primary_goal);
+  const [loading, setLoading] = useState(true);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [overview, setOverview] = useState<OverviewResponse | null>(null);
+  const [strategy, setStrategy] = useState<StrategySimulationResponse | null>(null);
+  const [auditor, setAuditor] = useState<AuditorResponse | null>(null);
+  const [sentinel, setSentinel] = useState<SentinelResponse | null>(null);
+  const [briefing, setBriefing] = useState<CommandCenterResponse | null>(null);
+  const [indices, setIndices] = useState<MarketIndexResponse["indices"]>([]);
   const fullName = profile?.full_name?.split(" ")[0] ?? "Investor";
+  const hasPortfolio = Boolean(auditor?.holdings?.length);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDashboard() {
+      setLoading(true);
+      setPageError(null);
+
+      try {
+        const [overviewResponse, auditorResponse, sentinelResponse, briefingResponse, indicesResponse] = await Promise.all([
+          fetchJson<OverviewResponse>(`${apiBaseUrl}/overview`),
+          fetchJson<AuditorResponse>(`${apiBaseUrl}/auditor/report`),
+          fetchJson<SentinelResponse>(`${apiBaseUrl}/sentinel/alerts`),
+          fetchJson<CommandCenterResponse>(`${apiBaseUrl}/command-center/briefing`),
+          fetchJson<MarketIndexResponse>(`${apiBaseUrl}/market/indices?index_names=${encodeURIComponent(sectorIndexNames.join(","))}`),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setOverview(overviewResponse);
+        setAuditor(auditorResponse);
+        setSentinel(sentinelResponse);
+        setBriefing(briefingResponse);
+        setIndices(indicesResponse.indices);
+      } catch {
+        if (!cancelled) {
+          setPageError("No data available right now. Make sure the backend is running and a portfolio CSV has been uploaded.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadDashboard();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStrategy() {
+      try {
+        const response = await fetchJson<StrategySimulationResponse>(`${apiBaseUrl}/strategy/simulate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            monthly_surplus: sipAmount,
+            risk_mode: "balanced",
+          }),
+        });
+
+        if (!cancelled) {
+          setStrategy(response);
+        }
+      } catch {
+        if (!cancelled) {
+          setStrategy(null);
+        }
+      }
+    }
+
+    void loadStrategy();
+    return () => {
+      cancelled = true;
+    };
+  }, [sipAmount]);
+
+  const radarMetrics = useMemo(() => {
+    if (!auditor || !sentinel) {
+      return [];
+    }
+
+    const holdings = auditor.holdings;
+    const negativeCount = holdings.filter((holding) => parsePercent(holding.performance) < 0).length;
+    const etfCount = holdings.filter((holding) => holding.name.toUpperCase().includes("ETF") || holding.symbol.includes("BEES")).length;
+    const averageRisk =
+      holdings.length > 0 ? holdings.reduce((sum, holding) => sum + holding.volatility_impact, 0) / holdings.length : 0;
+
+    return [
+      { label: "Diversification", value: auditor.diversification_score },
+      { label: "Tax Efficiency", value: clamp(45 + negativeCount * 12, 0, 100) },
+      { label: "Risk vs Reward", value: clamp(100 - averageRisk * 0.6, 0, 100) },
+      { label: "Goal Alignment", value: clamp(100 - sentinel.vulnerability_score / 2, 0, 100) },
+      { label: "Low Fees", value: clamp(40 + etfCount * 10, 0, 100) },
+    ];
+  }, [auditor, sentinel]);
+
+  const rebalanceData = useMemo(() => {
+    if (!auditor?.holdings || !strategy?.recommended_split) {
+      return [];
+    }
+
+    const actualBuckets = {
+      equity: 0,
+      debt: 0,
+      gold: 0,
+      international: 0,
+    };
+
+    let total = 0;
+    for (const holding of auditor.holdings) {
+      const value = parseCurrency(holding.market_value);
+      total += value;
+      const name = `${holding.symbol} ${holding.name}`.toUpperCase();
+      if (name.includes("GOLD")) {
+        actualBuckets.gold += value;
+      } else {
+        actualBuckets.equity += value;
+      }
+    }
+
+    return [
+      { label: "Equity", actual: total ? Math.round((actualBuckets.equity / total) * 100) : 0, target: Math.round((strategy.recommended_split.equity ?? 0) * 100), color: "#76f7bf" },
+      { label: "Debt", actual: total ? Math.round((actualBuckets.debt / total) * 100) : 0, target: Math.round((strategy.recommended_split.debt ?? 0) * 100), color: "#9dc1ff" },
+      { label: "Gold", actual: total ? Math.round((actualBuckets.gold / total) * 100) : 0, target: Math.round((strategy.recommended_split.gold ?? 0) * 100), color: "#ffb95f" },
+      { label: "International", actual: total ? Math.round((actualBuckets.international / total) * 100) : 0, target: Math.round((strategy.recommended_split.international ?? 0) * 100), color: zenithPurple },
+    ];
+  }, [auditor, strategy]);
+
+  const scatterPoints = useMemo(() => {
+    if (!auditor?.holdings) {
+      return [];
+    }
+
+    return auditor.holdings.map((holding) => {
+      const performance = parsePercent(holding.performance);
+      return {
+        label: holding.symbol,
+        risk: clamp(holding.volatility_impact, 5, 95),
+        returns: clamp(50 + performance * 8, 5, 95),
+        tone: performance < 0 ? "slacker" : performance > 1 ? "star" : "steady",
+      };
+    });
+  }, [auditor]);
+
+  const microInsights = useMemo(() => {
+    const insights: string[] = [];
+    if (overview?.risk_profile) {
+      insights.push(`Portfolio stance: ${overview.risk_profile}.`);
+    }
+    if (briefing?.headlines?.length) {
+      insights.push(...briefing.headlines.slice(0, 2));
+    }
+    if (sentinel?.alerts?.length) {
+      insights.push(...sentinel.alerts.slice(0, 2).map((alert) => alert.headline));
+    }
+    return insights;
+  }, [briefing, overview, sentinel]);
+
+  const executionActions = useMemo(() => {
+    if (!briefing?.signals?.length) {
+      return [];
+    }
+    return briefing.signals.map((signal) => ({
+      title: signal.title,
+      subtitle: signal.reasoning,
+      icon: signal.action.includes("rebalance") ? "sync_alt" : "bolt",
+    }));
+  }, [briefing]);
+
+  const sectorHeatmap = useMemo(() => {
+    return indices.map((index) => ({
+      label: index.index.replace("NIFTY ", ""),
+      value: `${index.percent_change >= 0 ? "+" : ""}${index.percent_change.toFixed(2)}%`,
+      tone: index.percent_change >= 0 ? "gain" : "loss",
+    }));
+  }, [indices]);
 
   const projection = useMemo(() => {
     const principalSeries = Array.from({ length: 8 }, (_, index) => Math.round((sipAmount * 12 * (index + 1)) / 1000));
-    const growthMultiplier = Math.max(1.45, 2.4 - (retirementAge - 45) * 0.05);
+    const marketLift = sentinel ? 1 + Math.max(parseLeadingPercent(sentinel.aggregate_impact) / 100, -0.2) : 1;
+    const growthMultiplier = Math.max(1.2, (2.4 - (retirementAge - 45) * 0.05) * marketLift);
     const projectedSeries = principalSeries.map((value, index) => Math.round(value * (1 + index * 0.1) * growthMultiplier));
     return { principalSeries, projectedSeries };
-  }, [retirementAge, sipAmount]);
+  }, [retirementAge, sentinel, sipAmount]);
 
   const projectedCorpusLakhs = projection.projectedSeries[projection.projectedSeries.length - 1] ?? 0;
-  const dayMove = 1.42;
+  const dayMove = parseLeadingPercent(sentinel?.aggregate_impact);
+  const dayPnl = overview?.stats.find((stat) => stat.label === "Day P&L")?.value;
+  const totalPortfolioValue = overview?.total_portfolio_value ?? "No data available";
+  const gaugeValue = auditor?.diversification_score;
 
   return (
-    <AppShell metricLabel="Zenith Dashboard" metricValue={`INR ${sipAmount.toLocaleString()}/mo`}>
+    <AppShell metricLabel="Zenith Dashboard" metricValue={overview?.monthly_surplus ?? `INR ${sipAmount.toLocaleString()}/mo`}>
       <div className="mx-auto max-w-[1600px] space-y-8">
+        {pageError ? (
+          <Panel className="border border-error/20 bg-error/10 p-5 text-sm text-error">
+            {pageError}
+          </Panel>
+        ) : null}
+
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <KpiCard
             eyebrow="Total Portfolio Value"
-            value="INR 12,40,000"
-            caption={`Welcome back, ${fullName}. Your long-term engine is compounding steadily.`}
+            value={loading ? "Loading..." : totalPortfolioValue}
+            caption={overview ? `Welcome back, ${fullName}. ${overview.risk_profile}.` : "No data available"}
             icon="account_balance_wallet"
           />
           <KpiCard
             eyebrow="Day's Gain / Loss"
-            value={`+${dayMove.toFixed(2)}%`}
-            caption="Outperforming your blended benchmark today."
-            tone="gain"
+            value={sentinel ? `${dayMove >= 0 ? "+" : ""}${dayMove.toFixed(2)}%` : "No data available"}
+            caption={dayPnl ?? "No data available"}
+            tone={dayMove >= 0 ? "gain" : "default"}
             icon="candlestick_chart"
-            sparkline={<Sparkline />}
+            sparkline={sentinel ? <Sparkline positive={dayMove >= 0} /> : undefined}
           />
           <KpiCard
             eyebrow="Zenith Health Score"
-            value="82 / 100"
-            caption="Diversification and goal alignment are strong. Tax efficiency needs attention."
+            value={typeof gaugeValue === "number" ? `${gaugeValue} / 100` : "No data available"}
+            caption={auditor?.recommendation.reason ?? "No data available"}
             icon="health_and_safety"
-            gaugeValue={82}
+            gaugeValue={gaugeValue}
           />
           <KpiCard
             eyebrow="Execution Readiness"
-            value="3 actions"
-            caption="Two savings levers and one growth lever are ready for one-click execution."
+            value={briefing?.signals?.length ? `${briefing.signals.length} actions` : "No data available"}
+            caption={briefing?.execution_summary.market_status ?? "No data available"}
             icon="bolt"
           />
         </section>
@@ -126,7 +339,7 @@ export function CommandCenterPage() {
                 help="Shows how principal builds steadily while market growth expands when you increase SIPs or give compounding more time."
                 accent="purple"
               >
-                {hasPortfolio ? (
+                {hasPortfolio && strategy ? (
                   <WhatIfProjectionChart
                     sipAmount={sipAmount}
                     retirementAge={retirementAge}
@@ -135,12 +348,11 @@ export function CommandCenterPage() {
                     projectedSeries={projection.projectedSeries}
                     onSipChange={setSipAmount}
                     onRetirementAgeChange={setRetirementAge}
+                    wealthAtFifty={strategy.wealth_at_fifty}
+                    strategySummary={strategy.summary}
                   />
                 ) : (
-                  <GhostChart
-                    title="Upload your portfolio to unlock your Risk DNA."
-                    body="We will calibrate your future projection once your broker or statement data arrives."
-                  />
+                  <NoDataCard title="No data available" body="Upload a portfolio CSV and keep the backend running to generate live strategy projections." />
                 )}
               </ChartCard>
 
@@ -149,7 +361,7 @@ export function CommandCenterPage() {
                 description="Balance across diversification, tax efficiency, and fee discipline"
                 help="Each spoke represents one pillar of portfolio quality. Any inward dip marks a weak spot worth fixing."
               >
-                {hasPortfolio ? <RadarChart metrics={healthMetrics} /> : <GhostChart title="Radar unlocks after ingestion." body="We need real holdings to compare concentration, tax drag, and fees." compact />}
+                {hasPortfolio && radarMetrics.length > 0 ? <RadarChart metrics={radarMetrics} /> : <NoDataCard title="No data available" body="Radar metrics will appear after live portfolio analytics are available." compact />}
               </ChartCard>
             </section>
 
@@ -159,7 +371,7 @@ export function CommandCenterPage() {
                 description="Target versus actual allocation with drift layers"
                 help="The outer ring is your AI target mix and the inner ring is your live allocation. Mismatches reveal where rebalancing matters most."
               >
-                {hasPortfolio ? <RebalancingDonut data={rebalanceData} /> : <GhostChart title="Target overlays appear after sync." body="Connect a broker or upload a statement to compare actual versus recommended allocation." compact />}
+                {hasPortfolio && rebalanceData.length > 0 ? <RebalancingDonut data={rebalanceData} /> : <NoDataCard title="No data available" body="Rebalancing targets require both a live basket and a strategy simulation response." compact />}
               </ChartCard>
 
               <ChartCard
@@ -167,7 +379,7 @@ export function CommandCenterPage() {
                 description="Find stars and slackers in your holdings"
                 help="Assets in high-risk, low-return territory are bugs in the portfolio. The best candidates move toward lower risk and higher return."
               >
-                {hasPortfolio ? <ScatterChart points={scatterPoints} /> : <GhostChart title="Asset quality map is waiting." body="We need position-level volatility and return history to place assets on the matrix." compact />}
+                {hasPortfolio && scatterPoints.length > 0 ? <ScatterChart points={scatterPoints} /> : <NoDataCard title="No data available" body="Scatter points need live holdings and volatility analytics." compact />}
               </ChartCard>
             </section>
 
@@ -177,7 +389,7 @@ export function CommandCenterPage() {
                 description="See how contributions and markets built the corpus"
                 help="This breaks your current balance into starting capital, fresh savings, market gains, and drag from taxes or fees."
               >
-                {hasPortfolio ? <WaterfallChart items={waterfallData} /> : <GhostChart title="Contribution story unlocks after import." body="We reconstruct the journey of your balance once transaction history is available." compact />}
+                <NoDataCard title="No data available" body="Waterfall attribution needs contribution and cost-basis history, which is not yet exposed by the backend." compact />
               </ChartCard>
 
               <ChartCard
@@ -185,7 +397,7 @@ export function CommandCenterPage() {
                 description="Match red losses against green gains"
                 help="Large red loss bars that can offset green gains become harvest candidates, turning tax optimization into a simple visual decision."
               >
-                {hasPortfolio ? <TaxHarvestChart items={taxHarvestData} /> : <GhostChart title="Tax optimizer needs cost basis data." body="Upload a portfolio to reveal which losses are large enough to offset gains." compact />}
+                <NoDataCard title="No data available" body="Tax-loss harvesting needs lot-level cost basis data. Once the backend exposes that, this panel can populate automatically." compact />
               </ChartCard>
             </section>
           </div>
@@ -203,7 +415,7 @@ export function CommandCenterPage() {
                 </span>
               </div>
               <div className="space-y-4">
-                {microInsights.map((insight, index) => (
+                {microInsights.length > 0 ? microInsights.map((insight, index) => (
                   <div key={insight} className="rounded-2xl border border-white/5 bg-white/[0.03] p-4">
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-[10px] uppercase tracking-[0.2em] text-neutral-500">Agent note #{index + 1}</span>
@@ -211,7 +423,7 @@ export function CommandCenterPage() {
                     </div>
                     <p className="text-sm leading-relaxed text-on-surface-variant">{insight}</p>
                   </div>
-                ))}
+                )) : <InlineNoData message="No data available" />}
               </div>
             </Panel>
 
@@ -224,7 +436,7 @@ export function CommandCenterPage() {
                 <MaterialIcon name="task_alt" className="text-2xl text-white" />
               </div>
               <div className="space-y-3">
-                {executionActions.map((action) => (
+                {executionActions.length > 0 ? executionActions.map((action) => (
                   <button key={action.title} className="w-full rounded-2xl border border-white/10 bg-white/5 p-4 text-left transition hover:border-tertiary/40 hover:bg-white/10">
                     <div className="flex items-start gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-tertiary/15 text-tertiary">
@@ -236,7 +448,7 @@ export function CommandCenterPage() {
                       </div>
                     </div>
                   </button>
-                ))}
+                )) : <InlineNoData message="No data available" />}
               </div>
             </Panel>
 
@@ -249,7 +461,7 @@ export function CommandCenterPage() {
                 <MaterialIcon name="grid_view" className="text-2xl text-white" />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {sectorHeatmap.map((sector) => (
+                {sectorHeatmap.length > 0 ? sectorHeatmap.map((sector) => (
                   <div
                     key={sector.label}
                     className={`rounded-2xl border p-4 ${
@@ -261,10 +473,10 @@ export function CommandCenterPage() {
                     <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-400">{sector.label}</div>
                     <div className={`mt-2 text-xl font-black ${sector.tone === "gain" ? "text-tertiary" : "text-error"}`}>{sector.value}</div>
                   </div>
-                ))}
+                )) : <InlineNoData message="No data available" />}
               </div>
               <p className="mt-4 text-xs leading-relaxed text-on-surface-variant">
-                NSE MCP sector snapshots can plug into this panel next for live sector breadth and rotation signals.
+                Live NSE sector indices populate this heatmap when market breadth data is available.
               </p>
             </Panel>
           </aside>
@@ -272,6 +484,37 @@ export function CommandCenterPage() {
       </div>
     </AppShell>
   );
+}
+
+async function fetchJson<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(`Request failed for ${url}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function parseCurrency(value: string) {
+  const normalized = value.replace("INR", "").split(",").join("").trim();
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parsePercent(value: string) {
+  const parsed = Number(value.replace("%", "").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseLeadingPercent(value?: string) {
+  if (!value) {
+    return 0;
+  }
+  const match = value.match(/[+-]?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : 0;
 }
 
 function KpiCard(props: {
@@ -304,15 +547,15 @@ function KpiCard(props: {
   );
 }
 
-function Sparkline() {
+function Sparkline({ positive }: { positive: boolean }) {
   return (
     <svg viewBox="0 0 180 44" className="h-11 w-full">
-      <path d="M0 34 C 18 28, 30 31, 44 20 S 74 16, 92 23 S 126 27, 142 15 S 166 8, 180 10" fill="none" stroke="#76f7bf" strokeWidth="3" strokeLinecap="round" />
-      <path d="M0 43 L0 34 C 18 28, 30 31, 44 20 S 74 16, 92 23 S 126 27, 142 15 S 166 8, 180 10 L180 43 Z" fill="url(#spark-fill)" opacity="0.2" />
+      <path d="M0 34 C 18 28, 30 31, 44 20 S 74 16, 92 23 S 126 27, 142 15 S 166 8, 180 10" fill="none" stroke={positive ? "#76f7bf" : "#ff6b7d"} strokeWidth="3" strokeLinecap="round" />
+      <path d="M0 43 L0 34 C 18 28, 30 31, 44 20 S 74 16, 92 23 S 126 27, 142 15 S 166 8, 180 10 L180 43 Z" fill={`url(#spark-fill-${positive ? "up" : "down"})`} opacity="0.2" />
       <defs>
-        <linearGradient id="spark-fill" x1="0" x2="0" y1="0" y2="1">
-          <stop offset="0%" stopColor="#76f7bf" />
-          <stop offset="100%" stopColor="#76f7bf" stopOpacity="0" />
+        <linearGradient id={`spark-fill-${positive ? "up" : "down"}`} x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={positive ? "#76f7bf" : "#ff6b7d"} />
+          <stop offset="100%" stopColor={positive ? "#76f7bf" : "#ff6b7d"} stopOpacity="0" />
         </linearGradient>
       </defs>
     </svg>
@@ -397,6 +640,26 @@ function GhostChart(props: { title: string; body: string; compact?: boolean }) {
   );
 }
 
+function NoDataCard(props: { title: string; body: string; compact?: boolean }) {
+  return (
+    <div className={`rounded-[1.75rem] border border-dashed border-white/10 bg-white/[0.03] ${props.compact ? "p-6" : "p-8"}`}>
+      <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-white/5 text-neutral-400">
+        <MaterialIcon name="database" className="text-3xl" />
+      </div>
+      <h4 className="text-lg font-bold text-white">{props.title}</h4>
+      <p className="mt-2 max-w-md text-sm leading-relaxed text-on-surface-variant">{props.body}</p>
+    </div>
+  );
+}
+
+function InlineNoData(props: { message: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-5 text-sm text-on-surface-variant">
+      {props.message}
+    </div>
+  );
+}
+
 function WhatIfProjectionChart(props: {
   sipAmount: number;
   retirementAge: number;
@@ -405,6 +668,8 @@ function WhatIfProjectionChart(props: {
   projectedSeries: number[];
   onSipChange: (value: number) => void;
   onRetirementAgeChange: (value: number) => void;
+  wealthAtFifty: string;
+  strategySummary: string;
 }) {
   const principalPath = buildAreaPath(props.principalSeries, 420, 220);
   const projectionPath = buildAreaPath(props.projectedSeries, 420, 220);
@@ -419,10 +684,9 @@ function WhatIfProjectionChart(props: {
           <div className="mt-2 text-xs uppercase tracking-[0.16em] text-tertiary">Zenith Purple = AI-advised growth layer</div>
         </div>
         <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-          <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Scenario outcome</div>
-          <div className="mt-2 text-lg font-semibold text-white">
-            Retiring at {props.retirementAge} with SIPs of INR {props.sipAmount.toLocaleString()} produces a visibly steeper compounding curve.
-          </div>
+          <div className="text-[10px] uppercase tracking-[0.18em] text-neutral-500">Wealth at fifty</div>
+          <div className="mt-2 text-lg font-semibold text-white">{props.wealthAtFifty}</div>
+          <div className="mt-2 text-sm leading-relaxed text-on-surface-variant">{props.strategySummary}</div>
         </div>
       </div>
 

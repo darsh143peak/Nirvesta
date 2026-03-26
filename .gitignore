@@ -7,3 +7,4 @@ backend/.venv
 backend/__pycache__
 backend/**/*.pyc
 backend/*.egg-info
+backend/data/portfolio_holdings.json

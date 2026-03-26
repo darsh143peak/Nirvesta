@@ -29,15 +29,7 @@ class Settings(BaseSettings):
         alias="NIRVESTA_MARKET_SYMBOLS",
     )
     portfolio_holdings: dict[str, float] = Field(
-        default_factory=lambda: {
-            "INFY": 12,
-            "HDFCBANK": 18,
-            "RELIANCE": 8,
-            "ITC": 150,
-            "SBIN": 25,
-            "NIFTYBEES": 80,
-            "GOLDBEES": 60,
-        },
+        default_factory=dict,
         alias="NIRVESTA_PORTFOLIO_HOLDINGS",
     )
     market_cache_ttl_seconds: int = Field(default=60, alias="NIRVESTA_MARKET_CACHE_TTL_SECONDS")

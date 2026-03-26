@@ -39,6 +39,18 @@ class UploadPortfolioResponse(BaseModel):
     accepted: bool
     detected_format: str
     holdings_detected: int
+    symbols: list[str]
+    persistence_path: str
+    notes: list[str]
+
+
+class BatchUploadPortfolioResponse(BaseModel):
+    accepted: bool
+    files_processed: int
+    filenames: list[str]
+    holdings_detected: int
+    symbols: list[str]
+    persistence_path: str
     notes: list[str]
 
 

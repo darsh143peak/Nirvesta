@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from math import sqrt
+from io import StringIO
+from pathlib import Path
 from time import time
 from typing import Any, BinaryIO
 from urllib.parse import quote
@@ -16,6 +18,7 @@ from .models import (
     AuditHolding,
     AuditRecommendation,
     AuditorResponse,
+    BatchUploadPortfolioResponse,
     CommandCenterResponse,
     CommandSignal,
     ConciergeMessageRequest,
@@ -43,6 +46,8 @@ from .models import (
 settings = get_settings()
 _CACHE: dict[str, tuple[float, Any]] = {}
 _NSE_SOURCE = "NSE India public market endpoints"
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+_PORTFOLIO_FILE = _DATA_DIR / "portfolio_holdings.json"
 
 
 @dataclass
@@ -68,6 +73,19 @@ class PortfolioPosition:
 
 def get_overview() -> OverviewResponse:
     positions = _get_portfolio_positions()
+    if not positions:
+        return OverviewResponse(
+            total_portfolio_value="No data available",
+            monthly_surplus="No data available",
+            risk_profile="No data available",
+            stats=[
+                OverviewStat(label="Day P&L", value="No data available", tone="neutral"),
+                OverviewStat(label="NIFTY 50", value="No data available", tone="neutral"),
+                OverviewStat(label="Market State", value="No data available", tone="neutral"),
+                OverviewStat(label="Watch Alerts", value="No data available", tone="neutral"),
+            ],
+        )
+
     total_value = sum(position.market_value for position in positions)
     total_day_change = sum(position.day_change_value for position in positions)
     market_status = get_market_status()
@@ -133,16 +151,68 @@ def analyze_uploaded_portfolio(filename: str, file_obj: BinaryIO) -> UploadPortf
     raw = file_obj.read()
     lowered_name = filename.lower()
     detected_format = "pdf" if lowered_name.endswith(".pdf") else "spreadsheet"
-    lines = [line for line in raw.decode("utf-8", errors="ignore").splitlines() if line.strip()]
-    holdings_detected = max(1, min(len(lines) - 1, 12)) if lines else 3
+    if detected_format == "pdf":
+        return UploadPortfolioResponse(
+            filename=filename,
+            accepted=False,
+            detected_format=detected_format,
+            holdings_detected=0,
+            symbols=[],
+            persistence_path=str(_PORTFOLIO_FILE),
+            notes=[
+                "PDF upload is accepted by the endpoint, but automatic holdings replacement currently supports CSV text only.",
+                "Use the sample CSV format in backend/data/mock_portfolio_upload.csv to replace the live basket.",
+            ],
+        )
+
+    decoded = raw.decode("utf-8-sig", errors="ignore")
+    holdings = _parse_portfolio_csv(decoded)
+    _save_uploaded_holdings(holdings)
+    _CACHE.clear()
+
     return UploadPortfolioResponse(
         filename=filename,
-        accepted=True,
+        accepted=bool(holdings),
         detected_format=detected_format,
-        holdings_detected=holdings_detected,
+        holdings_detected=len(holdings),
+        symbols=sorted(holdings.keys()),
+        persistence_path=str(_PORTFOLIO_FILE),
         notes=[
-            "Portfolio artifact accepted for normalization.",
-            "Replace the default portfolio holdings env var once you persist uploaded positions.",
+            "Uploaded CSV holdings have replaced the default configured basket.",
+            "All portfolio-derived endpoints now read from the persisted holdings file until you upload a new CSV.",
+        ],
+    )
+
+
+def analyze_uploaded_portfolios(files: list[tuple[str, BinaryIO]]) -> BatchUploadPortfolioResponse:
+    merged_holdings: dict[str, float] = {}
+    filenames: list[str] = []
+
+    for filename, file_obj in files:
+        raw = file_obj.read()
+        lowered_name = filename.lower()
+        if lowered_name.endswith(".pdf"):
+            raise ValueError("Batch replacement currently supports CSV files only.")
+
+        decoded = raw.decode("utf-8-sig", errors="ignore")
+        holdings = _parse_portfolio_csv(decoded)
+        filenames.append(filename)
+        for symbol, quantity in holdings.items():
+            merged_holdings[symbol] = merged_holdings.get(symbol, 0.0) + quantity
+
+    _save_uploaded_holdings(merged_holdings)
+    _CACHE.clear()
+
+    return BatchUploadPortfolioResponse(
+        accepted=bool(merged_holdings),
+        files_processed=len(filenames),
+        filenames=filenames,
+        holdings_detected=len(merged_holdings),
+        symbols=sorted(merged_holdings.keys()),
+        persistence_path=str(_PORTFOLIO_FILE),
+        notes=[
+            "Uploaded CSV files were merged by symbol and now replace the active portfolio basket.",
+            "If the same symbol appeared in multiple files, quantities were summed before persistence.",
         ],
     )
 
@@ -252,6 +322,14 @@ def get_market_recommendations() -> MarketEngineResponse:
 
 def get_sentinel_alerts() -> SentinelResponse:
     positions = sorted(_get_portfolio_positions(), key=lambda position: position.quote.percent_change)
+    if not positions:
+        return SentinelResponse(
+            vulnerability_score=0,
+            aggregate_impact="No data available",
+            auto_mitigation_ready=False,
+            alerts=[],
+        )
+
     total_value = sum(position.market_value for position in positions) or 1
     aggregate_percent = (sum(position.day_change_value for position in positions) / total_value) * 100
     largest_weight = max((position.market_value / total_value for position in positions), default=0)
@@ -282,6 +360,19 @@ def get_sentinel_alerts() -> SentinelResponse:
 
 def get_auditor_report() -> AuditorResponse:
     positions = sorted(_get_portfolio_positions(), key=lambda position: position.market_value, reverse=True)
+    if not positions:
+        return AuditorResponse(
+            diversification_score=0,
+            annualized_risk_trend=[],
+            recommendation=AuditRecommendation(
+                current_holding="No data available",
+                suggested_holding="No data available",
+                expected_benefit="No data available",
+                reason="Upload a portfolio CSV to generate live audit recommendations.",
+            ),
+            holdings=[],
+        )
+
     total_value = sum(position.market_value for position in positions) or 1
     weights = [position.market_value / total_value for position in positions]
     concentration = sum(weight * weight for weight in weights)
@@ -319,6 +410,17 @@ def get_auditor_report() -> AuditorResponse:
 def get_command_center_briefing() -> CommandCenterResponse:
     indices = get_market_indices(["NIFTY 50", "NIFTY BANK", "NIFTY IT", "NIFTY AUTO"]).indices
     positions = sorted(_get_portfolio_positions(), key=lambda position: position.quote.percent_change)
+    if not positions:
+        return CommandCenterResponse(
+            headlines=[f"{index.index} {index.percent_change:+.2f}% at {index.last:,.2f}" for index in indices[:3]],
+            signals=[],
+            execution_summary={
+                "market_status": get_market_status().market_state[0].status if get_market_status().market_state else "No data available",
+                "watchlist_leader": "No data available",
+                "watchlist_laggard": "No data available",
+            },
+        )
+
     best = max(positions, key=lambda position: position.quote.percent_change)
     worst = min(positions, key=lambda position: position.quote.percent_change)
 
@@ -448,9 +550,51 @@ def get_market_status() -> MarketStatusResponse:
 
 def _get_portfolio_positions() -> list[PortfolioPosition]:
     positions: list[PortfolioPosition] = []
-    for symbol, quantity in settings.portfolio_holdings.items():
+    for symbol, quantity in _load_portfolio_holdings().items():
         positions.append(PortfolioPosition(symbol=symbol, quantity=quantity, quote=get_market_quote(symbol)))
     return positions
+
+
+def _load_portfolio_holdings() -> dict[str, float]:
+    if _PORTFOLIO_FILE.exists():
+        payload = json.loads(_PORTFOLIO_FILE.read_text(encoding="utf-8"))
+        return {symbol.upper(): float(quantity) for symbol, quantity in payload.items()}
+    return settings.portfolio_holdings
+
+
+def _save_uploaded_holdings(holdings: dict[str, float]) -> None:
+    if not holdings:
+        raise ValueError("No valid holdings were found in the uploaded CSV.")
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    _PORTFOLIO_FILE.write_text(json.dumps(holdings, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _parse_portfolio_csv(content: str) -> dict[str, float]:
+    reader = csv.DictReader(StringIO(content))
+    if not reader.fieldnames:
+        raise ValueError("CSV is missing a header row.")
+
+    field_map = {field.strip().lower(): field for field in reader.fieldnames if field}
+    symbol_field = next((field_map[name] for name in ("symbol", "ticker", "security", "instrument") if name in field_map), None)
+    quantity_field = next((field_map[name] for name in ("quantity", "qty", "units", "shares") if name in field_map), None)
+
+    if not symbol_field or not quantity_field:
+        raise ValueError("CSV must include symbol and quantity columns.")
+
+    holdings: dict[str, float] = {}
+    for row in reader:
+        raw_symbol = (row.get(symbol_field) or "").strip().upper()
+        raw_quantity = (row.get(quantity_field) or "").strip()
+        if not raw_symbol or not raw_quantity:
+            continue
+        quantity = float(raw_quantity.replace(",", ""))
+        if quantity <= 0:
+            continue
+        holdings[raw_symbol] = holdings.get(raw_symbol, 0.0) + quantity
+
+    if not holdings:
+        raise ValueError("CSV did not contain any valid positive-quantity holdings.")
+    return holdings
 
 
 def _quote_to_recommendation(quote: QuoteSnapshot, category: str, action: str) -> Recommendation:

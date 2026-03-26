@@ -46,6 +46,29 @@ New market endpoints:
 - `GET /api/v1/market/indices?index_names=NIFTY 50,NIFTY BANK,NIFTY IT`
 - `GET /api/v1/market/status`
 
+## Upload CSV Holdings
+
+Uploading a CSV now replaces the default configured portfolio basket used by overview, auditor, sentinel, and command-center responses.
+
+Expected CSV columns:
+
+```csv
+symbol,quantity
+INFY,12
+HDFCBANK,18
+NIFTYBEES,80
+```
+
+Sample file to test with:
+
+- `backend/data/mock_portfolio_upload.csv`
+
+When uploaded through `POST /api/v1/connect/uploads`, the backend persists the holdings into:
+
+- `backend/data/portfolio_holdings.json`
+
+That file overrides `NIRVESTA_PORTFOLIO_HOLDINGS` until you upload a new CSV or delete the persisted JSON.
+
 ## Run The MCP Server
 
 `stdio` transport works well for local MCP clients:

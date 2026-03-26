@@ -1,8 +1,9 @@
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from .config import get_settings
 from .models import (
     AuditorResponse,
+    BatchUploadPortfolioResponse,
     CommandCenterResponse,
     ConciergeMessageRequest,
     ConciergeMessageResponse,
@@ -21,6 +22,7 @@ from .models import (
 )
 from .services import (
     analyze_uploaded_portfolio,
+    analyze_uploaded_portfolios,
     create_connect_session,
     get_auditor_report,
     get_command_center_briefing,
@@ -72,7 +74,18 @@ def connect_session(payload: ConnectSessionRequest) -> ConnectSessionResponse:
 
 @router.post("/connect/uploads", response_model=UploadPortfolioResponse)
 async def upload_portfolio(file: UploadFile = File(...)) -> UploadPortfolioResponse:
-    return analyze_uploaded_portfolio(file.filename or "portfolio.csv", file.file)
+    try:
+        return analyze_uploaded_portfolio(file.filename or "portfolio.csv", file.file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/connect/uploads/batch", response_model=BatchUploadPortfolioResponse)
+async def upload_portfolios(files: list[UploadFile] = File(...)) -> BatchUploadPortfolioResponse:
+    try:
+        return analyze_uploaded_portfolios([(file.filename or "portfolio.csv", file.file) for file in files])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/concierge/respond", response_model=ConciergeMessageResponse)

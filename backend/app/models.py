@@ -9,6 +9,20 @@ class HealthResponse(BaseModel):
     environment: str
 
 
+class AnalyzeRequest(BaseModel):
+    query: str = Field(min_length=1)
+    symbols: list[str] = Field(default_factory=list)
+    portfolio: dict[str, float] = Field(default_factory=dict)
+    context: dict[str, object] = Field(default_factory=dict)
+
+
+class AnalyzeResponse(BaseModel):
+    status: Literal["accepted", "completed"]
+    workflow: str
+    webhook_url: str
+    result: dict[str, object]
+
+
 class OverviewStat(BaseModel):
     label: str
     value: str

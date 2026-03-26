@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     env: str = Field(default="local", alias="NIRVESTA_ENV")
     timezone: str = Field(default="Asia/Kolkata", alias="NIRVESTA_TIMEZONE")
     api_prefix: str = Field(default="/api/v1", alias="NIRVESTA_API_PREFIX")
+    analyze_api_path: str = Field(default="/api/analyze", alias="NIRVESTA_ANALYZE_API_PATH")
     allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"],
         alias="NIRVESTA_ALLOWED_ORIGINS",
@@ -48,6 +49,8 @@ class Settings(BaseSettings):
     @property
     def resolved_celery_result_backend(self) -> str:
         return self.celery_result_backend or self.redis_url
+    n8n_master_flow_webhook_url: str | None = Field(default=None, alias="NIRVESTA_N8N_MASTER_FLOW_WEBHOOK_URL")
+    n8n_request_timeout_seconds: int = Field(default=45, alias="NIRVESTA_N8N_REQUEST_TIMEOUT_SECONDS")
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,0 +1,217 @@
+{
+  "name": "master_flow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "master-flow",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook_master_flow",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body ?? $json;\nreturn [{ json: { query: body.query ?? '', symbols: Array.isArray(body.symbols) ? body.symbols : [], portfolio: body.portfolio ?? {}, context: body.context ?? {}, requested_at: body.requested_at ?? new Date().toISOString() } }];"
+      },
+      "id": "function_prepare_master_flow",
+      "name": "Prepare Master Payload",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        480,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "data_archaeologist",
+        "mode": "each",
+        "waitForSubWorkflow": true,
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $json.query }}",
+            "symbols": "={{ $json.symbols }}",
+            "portfolio": "={{ $json.portfolio }}",
+            "context": "={{ $json.context }}"
+          }
+        }
+      },
+      "id": "execute_data_archaeologist",
+      "name": "Run Data Archaeologist",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        760,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "market_oracle",
+        "mode": "each",
+        "waitForSubWorkflow": true,
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $json.query }}",
+            "symbols": "={{ $json.symbols }}",
+            "portfolio": "={{ $json.portfolio }}",
+            "context": "={{ $json.context }}"
+          }
+        }
+      },
+      "id": "execute_market_oracle",
+      "name": "Run Market Oracle",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        760,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine"
+      },
+      "id": "merge_master_flow",
+      "name": "Merge Agent Outputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "cio_agent",
+        "mode": "each",
+        "waitForSubWorkflow": true,
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "query": "={{ $node[\"Prepare Master Payload\"].json[\"query\"] }}",
+            "symbols": "={{ $node[\"Prepare Master Payload\"].json[\"symbols\"] }}",
+            "portfolio": "={{ $node[\"Prepare Master Payload\"].json[\"portfolio\"] }}",
+            "context": "={{ $node[\"Prepare Master Payload\"].json[\"context\"] }}",
+            "research": "={{ $json.research ?? $json.data_archaeologist ?? $json }}",
+            "analysis": "={{ $json.analysis ?? $json.market_oracle ?? $json }}"
+          }
+        }
+      },
+      "id": "execute_cio_agent",
+      "name": "Run CIO Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"workflow\": \"master_flow\", \"result\": $json } }}"
+      },
+      "id": "respond_master_flow",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        340
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Master Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Master Payload": {
+      "main": [
+        [
+          {
+            "node": "Run Data Archaeologist",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run Market Oracle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Data Archaeologist": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Market Oracle": {
+      "main": [
+        [
+          {
+            "node": "Merge Agent Outputs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Agent Outputs": {
+      "main": [
+        [
+          {
+            "node": "Run CIO Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run CIO Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

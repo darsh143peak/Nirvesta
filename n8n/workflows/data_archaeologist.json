@@ -1,0 +1,140 @@
+{
+  "name": "data_archaeologist",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "data-archaeologist",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook_data_archaeologist",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body ?? $json;\nconst query = body.query ?? 'Analyze the supplied portfolio context.';\nconst symbols = Array.isArray(body.symbols) ? body.symbols : [];\nreturn [{ json: { query, symbols, portfolio: body.portfolio ?? {}, context: body.context ?? {}, upstream: 'data_archaeologist' } }];"
+      },
+      "id": "function_prepare_data_archaeologist",
+      "name": "Prepare Research Context",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://127.0.0.1:8000/api/v1/overview",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "http_overview_data_archaeologist",
+      "name": "Fetch Overview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4.1-mini",
+        "prompt": "=You are the data_archaeologist agent. Use the research context below to produce a compact JSON object with keys `agent`, `summary`, `portfolio_observations`, and `data_gaps`.\\n\\nOriginal request: {{$node[\"Prepare Research Context\"].json[\"query\"]}}\\nSymbols: {{JSON.stringify($node[\"Prepare Research Context\"].json[\"symbols\"])}}\\nPortfolio: {{JSON.stringify($node[\"Prepare Research Context\"].json[\"portfolio\"])}}\\nOverview: {{JSON.stringify($json)}}",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "openai_data_archaeologist",
+      "name": "OpenAI Archaeologist",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1020,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"agent\": \"data_archaeologist\", \"research\": $json } }}"
+      },
+      "id": "respond_data_archaeologist",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1280,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Research Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Research Context": {
+      "main": [
+        [
+          {
+            "node": "Fetch Overview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Overview": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Archaeologist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Archaeologist": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

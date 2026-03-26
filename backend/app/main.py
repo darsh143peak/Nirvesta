@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import router
+from .api import public_router, router
 from .config import get_settings
 from .services import refresh_market_snapshot
 
@@ -55,6 +55,7 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix=settings.api_prefix)
+app.include_router(public_router)
 
 
 @app.get("/")

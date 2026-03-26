@@ -95,6 +95,43 @@ If you prefer the old in-process scheduler, set:
 NIRVESTA_USE_CELERY_SCHEDULER=false
 ```
 
+## n8n Agent Flows
+
+Workflow exports are available in:
+
+- `n8n/workflows/data_archaeologist.json`
+- `n8n/workflows/market_oracle.json`
+- `n8n/workflows/cio_agent.json`
+- `n8n/workflows/master_flow.json`
+
+The backend now also exposes:
+
+- `POST /api/analyze`
+
+Set the master n8n webhook URL in `.env` before using it:
+
+```bash
+NIRVESTA_N8N_MASTER_FLOW_WEBHOOK_URL=http://127.0.0.1:5678/webhook/master-flow
+NIRVESTA_N8N_REQUEST_TIMEOUT_SECONDS=45
+```
+
+Example request:
+
+```json
+{
+  "query": "Review my current basket and suggest the best next move.",
+  "symbols": ["INFY", "RELIANCE", "NIFTYBEES"],
+  "portfolio": {
+    "INFY": 12,
+    "RELIANCE": 8,
+    "NIFTYBEES": 80
+  },
+  "context": {
+    "risk_mode": "balanced"
+  }
+}
+```
+
 ## Upload CSV Holdings
 
 Uploading a CSV now replaces the default configured portfolio basket used by overview, auditor, sentinel, and command-center responses.

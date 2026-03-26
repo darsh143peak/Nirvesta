@@ -2,6 +2,8 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from .config import get_settings
 from .models import (
+    AnalyzeRequest,
+    AnalyzeResponse,
     AuditorResponse,
     BatchUploadPortfolioResponse,
     CommandCenterResponse,
@@ -22,6 +24,7 @@ from .models import (
     UploadPortfolioResponse,
 )
 from .services import (
+    analyze_with_master_flow,
     analyze_uploaded_portfolio,
     analyze_uploaded_portfolios,
     create_connect_session,
@@ -39,12 +42,23 @@ from .services import (
 )
 
 router = APIRouter()
+public_router = APIRouter()
 settings = get_settings()
 
 
 @router.get("/health", response_model=HealthResponse)
 def healthcheck() -> HealthResponse:
     return HealthResponse(status="ok", service="nirvesta-api", environment=settings.env)
+
+
+@public_router.post("/api/analyze", response_model=AnalyzeResponse)
+def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
+    try:
+        return analyze_with_master_flow(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=502, detail=f"Unable to reach n8n master_flow webhook: {exc}") from exc
 
 
 @router.get("/overview", response_model=OverviewResponse)

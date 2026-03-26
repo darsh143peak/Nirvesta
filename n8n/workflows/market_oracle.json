@@ -1,0 +1,140 @@
+{
+  "name": "market_oracle",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "market-oracle",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook_market_oracle",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "const body = $json.body ?? $json;\nconst query = body.query ?? 'Evaluate market conditions for the current portfolio.';\nconst symbols = Array.isArray(body.symbols) ? body.symbols : [];\nreturn [{ json: { query, symbols, portfolio: body.portfolio ?? {}, context: body.context ?? {}, upstream: 'market_oracle' } }];"
+      },
+      "id": "function_prepare_market_oracle",
+      "name": "Prepare Market Context",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        500,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=http://127.0.0.1:8000/api/v1/market/indices?index_names={{encodeURIComponent('NIFTY 50,NIFTY BANK,NIFTY IT')}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "http_indices_market_oracle",
+      "name": "Fetch Market Indices",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4.1-mini",
+        "prompt": "=You are the market_oracle agent. Produce a compact JSON object with keys `agent`, `market_view`, `signals`, and `risks`.\\n\\nOriginal request: {{$node[\"Prepare Market Context\"].json[\"query\"]}}\\nSymbols: {{JSON.stringify($node[\"Prepare Market Context\"].json[\"symbols\"])}}\\nPortfolio: {{JSON.stringify($node[\"Prepare Market Context\"].json[\"portfolio\"])}}\\nIndices: {{JSON.stringify($json)}}",
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "id": "openai_market_oracle",
+      "name": "OpenAI Oracle",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [
+        1020,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"agent\": \"market_oracle\", \"analysis\": $json } }}"
+      },
+      "id": "respond_market_oracle",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1280,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare Market Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Market Context": {
+      "main": [
+        [
+          {
+            "node": "Fetch Market Indices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Market Indices": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Oracle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Oracle": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

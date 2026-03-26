@@ -16,6 +16,8 @@ from uuid import uuid4
 from .config import get_settings
 from .models import (
     AlertItem,
+    AnalyzeRequest,
+    AnalyzeResponse,
     AuditHolding,
     AuditRecommendation,
     AuditorResponse,
@@ -179,6 +181,34 @@ def get_overview() -> OverviewResponse:
                 tone="warning" if down_alerts else "neutral",
             ),
         ],
+    )
+
+
+def analyze_with_master_flow(payload: AnalyzeRequest) -> AnalyzeResponse:
+    webhook_url = settings.n8n_master_flow_webhook_url
+    if not webhook_url:
+        raise ValueError("NIRVESTA_N8N_MASTER_FLOW_WEBHOOK_URL is not configured.")
+
+    normalized_symbols = [symbol.strip().upper() for symbol in payload.symbols if symbol.strip()]
+    normalized_portfolio = {
+        symbol.strip().upper(): float(quantity)
+        for symbol, quantity in payload.portfolio.items()
+        if symbol.strip()
+    }
+    request_payload = {
+        "query": payload.query,
+        "symbols": normalized_symbols,
+        "portfolio": normalized_portfolio,
+        "context": payload.context,
+        "requested_at": _iso_now(),
+    }
+    response_payload = _post_json(webhook_url, request_payload)
+
+    return AnalyzeResponse(
+        status="completed",
+        workflow="master_flow",
+        webhook_url=webhook_url,
+        result=response_payload if isinstance(response_payload, dict) else {"data": response_payload},
     )
 
 
@@ -876,6 +906,24 @@ def _fetch_json(url: str, cache_key: str) -> Any:
         payload = json.loads(response.read().decode("utf-8"))
     _set_cached(cache_key, payload)
     return payload
+
+
+def _post_json(url: str, payload: dict[str, Any]) -> Any:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=settings.n8n_request_timeout_seconds) as response:
+        raw = response.read().decode("utf-8")
+    if not raw.strip():
+        return {"message": "n8n master_flow returned an empty response."}
+    return json.loads(raw)
 
 
 def _get_cached(key: str) -> Any | None:

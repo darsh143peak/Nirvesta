@@ -332,7 +332,7 @@ export function AuthConnectPage() {
               <p className="mt-2 text-sm text-on-surface-variant">
                 These options stay available after auth so the next step can be broker linking and portfolio ingestion.
               </p>
-              <div className="mt-6 grid gap-4 sm:grid-cols-3">
+              <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                 {brokers.map((broker) => (
                   <div key={broker.name} className="rounded-[1.5rem] border border-white/5 bg-surface-container-high p-6 text-center">
                     <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl" style={{ backgroundColor: `${broker.color}1a` }}>
@@ -342,6 +342,13 @@ export function AuthConnectPage() {
                     <div className="mt-1 text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">{broker.tag}</div>
                   </div>
                 ))}
+                <div className="rounded-[1.5rem] border border-dashed border-white/10 bg-surface-container-high p-6 text-center">
+                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-white/5">
+                    <MaterialIcon name="upload_file" className="text-3xl text-white" />
+                  </div>
+                  <div className="font-bold text-white">Manual CSV Import</div>
+                  <div className="mt-1 text-[10px] uppercase tracking-[0.18em] text-on-surface-variant">.csv .xlsx .pdf</div>
+                </div>
               </div>
             </Panel>
           </section>

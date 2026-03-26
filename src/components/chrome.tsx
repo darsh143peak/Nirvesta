@@ -21,19 +21,21 @@ export function TopBar(props: {
   metricLabel?: string;
   metricValue?: string;
   rightSlot?: React.ReactNode;
+  withSidebar?: boolean;
 }) {
-  const { nav, metricLabel = "Investable Surplus", metricValue = "$42,500.00", rightSlot } = props;
+  const { metricLabel = "Investable Surplus", metricValue = "$42,500.00", rightSlot, withSidebar = true } = props;
   const { isAuthenticated, profile, signOut } = useAuth();
+  const visibleNav = primaryNav.filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect");
 
   return (
-    <header className="fixed inset-x-0 top-0 z-50 border-b border-white/5 bg-background/80 px-6 py-4 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-6">
+    <header className={`fixed left-0 right-0 top-0 z-50 border-b border-white/5 bg-background/80 px-6 py-4 backdrop-blur-xl ${withSidebar ? "lg:left-64" : ""}`}>
+      <div className="flex w-full items-center justify-between gap-6">
         <NavLink to="/" className="text-2xl font-black tracking-tighter text-white">
           Nirvesta
         </NavLink>
-        {nav ? (
+        {visibleNav.length > 0 ? (
           <nav className="hidden items-center gap-8 md:flex">
-            {nav.map((item) => (
+            {visibleNav.map((item) => (
               <NavLink
                 key={item.href}
                 to={item.href}
@@ -47,10 +49,8 @@ export function TopBar(props: {
               </NavLink>
             ))}
           </nav>
-        ) : (
-          <div className="hidden md:block" />
-        )}
-        <div className="flex items-center gap-4">
+        ) : <div className="hidden md:block" />}
+        <div className="ml-auto flex items-center gap-4">
           <div className="hidden items-end text-right lg:flex lg:flex-col">
             <span className="text-[10px] uppercase tracking-[0.25em] text-neutral-500">{metricLabel}</span>
             <span className="text-sm font-bold text-tertiary">{metricValue}</span>
@@ -110,13 +110,11 @@ export function Sidebar() {
 
 export function MobileDock() {
   const { isAuthenticated } = useAuth();
+  const visibleNav = primaryNav.filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect");
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-50 flex items-center justify-around rounded-t-[2rem] border-t border-white/10 bg-background/90 px-4 py-3 backdrop-blur-xl lg:hidden">
-      {primaryNav
-        .filter((item) => isAuthenticated || item.href === "/" || item.href === "/connect")
-        .slice(0, 4)
-        .map((item) => (
+      {visibleNav.slice(0, 4).map((item) => (
         <NavLink
           key={item.href}
           to={item.href}
@@ -142,11 +140,11 @@ export function AppShell(props: {
   rightSlot?: React.ReactNode;
   withSidebar?: boolean;
 }) {
-  const { children, topNav, metricLabel, metricValue, rightSlot, withSidebar = true } = props;
+  const { children, metricLabel, metricValue, rightSlot, withSidebar = true } = props;
 
   return (
     <div className="min-h-screen bg-background text-on-surface">
-      <TopBar nav={topNav} metricLabel={metricLabel} metricValue={metricValue} rightSlot={rightSlot} />
+      <TopBar metricLabel={metricLabel} metricValue={metricValue} rightSlot={rightSlot} withSidebar={withSidebar} />
       {withSidebar ? <Sidebar /> : null}
       <main className={`${withSidebar ? "lg:ml-64" : ""} px-6 pb-32 pt-24`}>{children}</main>
       <MobileDock />

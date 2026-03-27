@@ -369,7 +369,7 @@ export function CommandCenterPage() {
 
   return (
     <AppShell metricLabel="Zenith Dashboard" metricValue={overview?.monthly_surplus ?? `INR ${sipAmount.toLocaleString()}/mo`}>
-      <div className="mx-auto max-w-[1600px] space-y-8">
+      <div className="mx-auto max-w-[1600px] space-y-6 sm:space-y-8">
         {pageError ? (
           <Panel className="border border-error/20 bg-error/10 p-5 text-sm text-error">
             {pageError}
@@ -408,7 +408,7 @@ export function CommandCenterPage() {
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
           <div className="space-y-6">
-            <section className="grid gap-6 xl:grid-cols-[1.45fr_1fr]">
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
               <ChartCard
                 title='What-If Projection'
                 description="Guaranteed savings versus projected market growth"
@@ -441,7 +441,7 @@ export function CommandCenterPage() {
               </ChartCard>
             </section>
 
-            <section className="grid gap-6 xl:grid-cols-[1.05fr_1fr]">
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
               <ChartCard
                 title="Dynamic Rebalancing"
                 description="Target versus actual allocation with drift layers"
@@ -459,7 +459,7 @@ export function CommandCenterPage() {
               </ChartCard>
             </section>
 
-            <section className="grid gap-6 xl:grid-cols-[1.15fr_1fr]">
+            <section className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
               <ChartCard
                 title="Goal Progress Waterfall"
                 description="See how contributions and markets built the corpus"
@@ -717,13 +717,13 @@ function KpiCard(props: {
   gaugeValue?: number;
 }) {
   return (
-    <Panel className="relative overflow-hidden p-6">
+    <Panel className="relative overflow-hidden p-5 sm:p-6">
       <div className="absolute right-0 top-0 h-28 w-28 rounded-full bg-tertiary/10 blur-3xl" />
       <div className="relative z-10 flex h-full flex-col gap-5">
         <div className="flex items-start justify-between">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-neutral-500">{props.eyebrow}</p>
-            <h2 className={`mt-3 text-4xl font-black tracking-[-0.04em] ${props.tone === "gain" ? "text-tertiary" : "text-white"}`}>{props.value}</h2>
+            <h2 className={`mt-3 text-3xl font-black tracking-[-0.04em] sm:text-4xl ${props.tone === "gain" ? "text-tertiary" : "text-white"}`}>{props.value}</h2>
           </div>
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-white">
             <MaterialIcon name={props.icon} className="text-2xl" fill={props.icon === "health_and_safety"} />
@@ -756,7 +756,7 @@ function Gauge({ value }: { value: number }) {
   const degrees = Math.round((value / 100) * 360);
 
   return (
-    <div className="flex items-center gap-4">
+    <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
       <div
         className="relative h-20 w-20 rounded-full"
         style={{
@@ -782,11 +782,11 @@ function ChartCard(props: {
   children: React.ReactNode;
 }) {
   return (
-    <Panel className={`overflow-hidden p-6 ${props.accent === "purple" ? "ring-1 ring-[rgba(124,92,255,0.35)]" : ""}`}>
-      <div className="mb-6 flex items-start justify-between gap-4">
+    <Panel className={`overflow-hidden p-5 sm:p-6 ${props.accent === "purple" ? "ring-1 ring-[rgba(124,92,255,0.35)]" : ""}`}>
+      <div className="mb-5 flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h3 className="text-xl font-bold text-white">{props.title}</h3>
+            <h3 className="text-lg font-bold text-white sm:text-xl">{props.title}</h3>
             <InfoChip text={props.help} />
           </div>
           <p className="mt-2 text-sm text-on-surface-variant">{props.description}</p>
@@ -880,7 +880,7 @@ function WhatIfProjectionChart(props: {
         </div>
       </div>
 
-      <svg viewBox="0 0 420 220" className="h-[260px] w-full rounded-[1.5rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))] p-3">
+      <svg viewBox="0 0 420 220" className="h-[220px] w-full rounded-[1.5rem] bg-[linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.01))] p-3 sm:h-[240px] lg:h-[260px]">
         {[0, 1, 2, 3].map((index) => (
           <line key={index} x1="20" y1={35 + index * 44} x2="400" y2={35 + index * 44} stroke="rgba(255,255,255,0.06)" strokeDasharray="4 8" />
         ))}
@@ -964,8 +964,8 @@ function RadarChart({ metrics }: { metrics: ReadonlyArray<{ label: string; value
   const polygon = points.map((point) => `${point.x},${point.y}`).join(" ");
 
   return (
-    <div className="grid gap-5 md:grid-cols-[240px_1fr] md:items-center">
-      <svg viewBox="0 0 240 240" className="mx-auto h-[240px] w-[240px]">
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,240px)_minmax(0,1fr)] xl:items-center">
+      <svg viewBox="0 0 240 240" className="mx-auto h-[220px] w-[220px] sm:h-[240px] sm:w-[240px]">
         {steps.map((step) => {
           const ring = metrics.map((_metric, index) => {
             const angle = (Math.PI * 2 * index) / metrics.length - Math.PI / 2;
@@ -983,19 +983,14 @@ function RadarChart({ metrics }: { metrics: ReadonlyArray<{ label: string; value
         {points.map((point) => (
           <circle key={`${point.label}-dot`} cx={point.x} cy={point.y} r="4" fill="#76f7bf" />
         ))}
-        {points.map((point) => (
-          <text key={`${point.label}-label`} x={point.labelX} y={point.labelY} fill="#a0a0b8" fontSize="10" textAnchor="middle">
-            {point.label}
-          </text>
-        ))}
       </svg>
 
-      <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
         {metrics.map((metric) => (
           <div key={metric.label} className="rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-on-surface-variant">{metric.label}</span>
-              <span className="font-bold text-white">{metric.value}</span>
+              <span className="pr-3 text-sm text-on-surface-variant">{metric.label}</span>
+              <span className="shrink-0 font-bold text-white">{metric.value}</span>
             </div>
             <div className="mt-3 h-1.5 rounded-full bg-white/5">
               <div className="h-1.5 rounded-full bg-[linear-gradient(90deg,#7c5cff,#76f7bf)]" style={{ width: `${metric.value}%` }} />
@@ -1012,12 +1007,12 @@ function RebalancingDonut({ data }: { data: ReadonlyArray<{ label: string; actua
   const actualGradient = `conic-gradient(${data.map((item, index) => `${item.color} ${sumTo(data, index, "actual")}deg ${sumTo(data, index + 1, "actual")}deg`).join(", ")})`;
 
   return (
-    <div className="grid gap-5 md:grid-cols-[260px_1fr] md:items-center">
-      <div className="relative mx-auto h-64 w-64">
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,260px)_minmax(0,1fr)] xl:items-center">
+      <div className="relative mx-auto h-56 w-56 sm:h-60 sm:w-60 lg:h-64 lg:w-64">
         <div className="absolute inset-0 rounded-full opacity-35" style={{ background: targetGradient }} />
         <div className="absolute inset-[26px] rounded-full border-[18px] border-background" />
         <div className="absolute inset-[42px] rounded-full" style={{ background: actualGradient }} />
-        <div className="absolute inset-[86px] flex items-center justify-center rounded-full bg-surface-container-lowest text-center">
+        <div className="absolute inset-[72px] flex items-center justify-center rounded-full bg-surface-container-lowest text-center sm:inset-[80px] lg:inset-[86px]">
           <div>
             <div className="text-3xl font-black text-white">6.8%</div>
             <div className="mt-1 text-[10px] uppercase tracking-[0.22em] text-neutral-500">Net drift</div>
@@ -1025,7 +1020,7 @@ function RebalancingDonut({ data }: { data: ReadonlyArray<{ label: string; actua
         </div>
       </div>
 
-      <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
         {data.map((item) => {
           const drift = item.actual - item.target;
           return (
@@ -1033,14 +1028,14 @@ function RebalancingDonut({ data }: { data: ReadonlyArray<{ label: string; actua
               <div className="mb-2 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <span className="h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
-                  <span className="font-semibold text-white">{item.label}</span>
+                  <span className="pr-3 font-semibold text-white">{item.label}</span>
                 </div>
-                <span className={drift > 0 ? "text-error" : drift < 0 ? "text-tertiary" : "text-white"}>
+                <span className={`shrink-0 ${drift > 0 ? "text-error" : drift < 0 ? "text-tertiary" : "text-white"}`}>
                   {drift > 0 ? "+" : ""}
                   {drift}%
                 </span>
               </div>
-              <div className="flex items-center justify-between text-xs uppercase tracking-[0.16em] text-on-surface-variant">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-[0.16em] text-on-surface-variant">
                 <span>Actual {item.actual}%</span>
                 <span style={{ color: zenithPurple }}>Target {item.target}%</span>
               </div>
@@ -1055,7 +1050,7 @@ function RebalancingDonut({ data }: { data: ReadonlyArray<{ label: string; actua
 function ScatterChart({ points }: { points: ReadonlyArray<{ label: string; risk: number; returns: number; tone: string }> }) {
   return (
     <div>
-      <div className="relative h-[320px] rounded-[1.5rem] border border-white/10 bg-white/[0.03]">
+      <div className="relative h-[260px] rounded-[1.5rem] border border-white/10 bg-white/[0.03] sm:h-[300px] lg:h-[320px]">
         <div className="absolute inset-x-0 top-1/2 h-px bg-white/10" />
         <div className="absolute inset-y-0 left-1/2 w-px bg-white/10" />
         <div className="absolute left-4 top-4 text-[10px] uppercase tracking-[0.18em] text-neutral-500">High return</div>
@@ -1089,7 +1084,7 @@ function WaterfallChart({ items }: { items: ReadonlyArray<{ label: string; value
 
   return (
     <div>
-      <div className="grid h-[280px] grid-cols-5 items-end gap-4 rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-6">
+      <div className="grid h-[220px] grid-cols-5 items-end gap-3 rounded-[1.5rem] border border-white/10 bg-white/[0.03] p-4 sm:h-[250px] sm:gap-4 sm:p-5 lg:h-[280px] lg:p-6">
         {items.map((item) => {
           const height = Math.max(18, (Math.abs(item.value) / maxValue) * 200);
           const color =
@@ -1133,7 +1128,7 @@ function TaxHarvestChart({ items }: { items: ReadonlyArray<{ label: string; gain
                 <span className="rounded-full border border-tertiary/20 bg-tertiary/10 px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-tertiary">AI harvest candidate</span>
               ) : null}
             </div>
-            <div className="grid grid-cols-[1fr_1fr] gap-3">
+            <div className="grid gap-3 sm:grid-cols-[1fr_1fr]">
               <div>
                 <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-neutral-500">Gain</div>
                 <div className="h-3 rounded-full bg-white/5">

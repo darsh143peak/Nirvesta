@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     market_cache_ttl_seconds: int = Field(default=60, alias="NIRVESTA_MARKET_CACHE_TTL_SECONDS")
     market_refresh_interval_seconds: int = Field(default=3600, alias="NIRVESTA_MARKET_REFRESH_INTERVAL_SECONDS")
     estimated_brokerage_rate: float = Field(default=0.003, alias="NIRVESTA_ESTIMATED_BROKERAGE_RATE")
+    estimated_equity_exit_fee_rate: float = Field(default=0.0015, alias="NIRVESTA_ESTIMATED_EQUITY_EXIT_FEE_RATE")
+    estimated_etf_exit_fee_rate: float = Field(default=0.0, alias="NIRVESTA_ESTIMATED_ETF_EXIT_FEE_RATE")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="NIRVESTA_REDIS_URL")
     celery_broker_url: str | None = Field(default=None, alias="NIRVESTA_CELERY_BROKER_URL")
     celery_result_backend: str | None = Field(default=None, alias="NIRVESTA_CELERY_RESULT_BACKEND")
@@ -52,6 +54,10 @@ class Settings(BaseSettings):
         return self.celery_result_backend or self.redis_url
     n8n_master_flow_webhook_url: str | None = Field(default=None, alias="NIRVESTA_N8N_MASTER_FLOW_WEBHOOK_URL")
     n8n_request_timeout_seconds: int = Field(default=45, alias="NIRVESTA_N8N_REQUEST_TIMEOUT_SECONDS")
+    groq_api_key: str | None = Field(default=None, alias="NIRVESTA_GROQ_API_KEY")
+    groq_base_url: str = Field(default="https://api.groq.com/openai/v1", alias="NIRVESTA_GROQ_BASE_URL")
+    groq_model: str = Field(default="llama-3.3-70b-versatile", alias="NIRVESTA_GROQ_MODEL")
+    recommendation_monthly_contribution: float = Field(default=4500.0, alias="NIRVESTA_RECOMMENDATION_MONTHLY_CONTRIBUTION")
 
     model_config = SettingsConfigDict(
         env_file=".env",

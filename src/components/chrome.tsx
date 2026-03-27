@@ -11,7 +11,9 @@ type NavItem = {
 const primaryNav: NavItem[] = [
   { label: "Terminal", href: "/", icon: "terminal" },
   { label: "DashBoard", href: "/command-center", icon: "dashboard" },
+  { label: "Recommendations", href: "/recommendations", icon: "query_stats" },
   { label: "Portfolio", href: "/auditor", icon: "account_balance_wallet" },
+  { label: "Rebalancer", href: "/rebalancer", icon: "sync_alt" },
   { label: "Strategies", href: "/strategy", icon: "query_stats" },
   { label: "Alerts", href: "/sentinel", icon: "notifications_active" },
   { label: "Settings", href: "/settings", icon: "settings" },
@@ -115,9 +117,6 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <button className="mt-auto rounded-2xl border border-tertiary/20 bg-tertiary/10 px-4 py-4 text-[10px] font-bold uppercase tracking-[0.3em] text-tertiary transition hover:bg-tertiary/20">
-        New Strategy
-      </button>
     </aside>
   );
 }

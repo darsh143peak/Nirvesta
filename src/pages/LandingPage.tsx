@@ -7,9 +7,10 @@ const routeCards = [
   ["Connect & Authenticate", "Secure broker linking, statement uploads, and zero-latency ingestion for the Nirvesta ledger.", "/connect", "lock"],
   ["Concierge Onboarding", "Conversational risk discovery and persona mapping for autonomous portfolio behavior.", "/concierge", "support_agent"],
   ["Master Strategy Roadmap", "Goal-based planning with surplus sliders, milestone timing, and life-event simulations.", "/strategy", "rocket_launch"],
-  ["Market Opportunity Engine", "Precision ETF and SIP recommendations tuned to accelerate your wealth milestones.", "/market-engine", "query_stats"],
+  ["Market Opportunity Engine", "Precision ETF and SIP recommendations tuned to accelerate your wealth milestones.", "/recommendations", "query_stats"],
   ["Zenith Sentinel", "Live risk propagation, impact alerts, and one-click mitigations for exposed holdings.", "/sentinel", "notifications_active"],
   ["Portfolio Auditor", "Audit active positions, detect overlap, and surface fee-saving optimization swaps.", "/auditor", "account_balance_wallet"],
+  ["Portfolio Rebalancer", "Learn what each portfolio ratio means and get guided rebalance moves instead of generic advice.", "/rebalancer", "sync_alt"],
   ["Command Center", "High-density terminal view with AI briefings, live signals, and tactical execution flows.", "/command-center", "terminal"],
 ] as const;
 
@@ -29,7 +30,7 @@ export function LandingPage() {
         { label: "Terminal", href: "/" },
         { label: "Vault", href: "/connect" },
         { label: "Insights", href: "/sentinel" },
-        { label: "Pricing", href: "/market-engine" },
+        { label: "Recommendations", href: "/recommendations" },
       ]}
       metricValue="₹12,40,000"
       rightSlot={

@@ -3,13 +3,16 @@ from __future__ import annotations
 import csv
 import logging
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from io import StringIO
+from math import ceil, log
 from pathlib import Path
 from time import time
 from typing import Any, BinaryIO
 from urllib.parse import quote
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -41,10 +44,15 @@ from .models import (
     OverviewStat,
     QuoteSnapshot,
     Recommendation,
+    RebalancerMove,
+    RebalancerRatio,
+    RebalancerResponse,
     SentinelResponse,
     StrategyMilestone,
     StrategySimulationRequest,
     StrategySimulationResponse,
+    StrategyWhatIfRequest,
+    StrategyWhatIfResponse,
     UploadPortfolioResponse,
 )
 
@@ -190,12 +198,12 @@ def analyze_with_master_flow(payload: AnalyzeRequest) -> AnalyzeResponse:
     if not webhook_url:
         raise ValueError("NIRVESTA_N8N_MASTER_FLOW_WEBHOOK_URL is not configured.")
 
-    normalized_symbols = [symbol.strip().upper() for symbol in payload.symbols if symbol.strip()]
     normalized_portfolio = {
         symbol.strip().upper(): float(quantity)
         for symbol, quantity in payload.portfolio.items()
         if symbol.strip()
-    }
+    } or _load_portfolio_holdings()
+    normalized_symbols = [symbol.strip().upper() for symbol in payload.symbols if symbol.strip()] or sorted(normalized_portfolio.keys())
     request_payload = {
         "query": payload.query,
         "symbols": normalized_symbols,
@@ -222,7 +230,7 @@ def get_alerts_news_brief(focus_alert: str | None = None) -> AlertsNewsResponse:
     fallback_highlights = [alert.headline for alert in sentinel.alerts[:3]]
     fallback_actions = [alert.action.replace("_", " ").title() for alert in sentinel.alerts[:3] if alert.action]
     fallback_summary = (
-        f"Zenith Sentinel is monitoring {len(sentinel.alerts)} live alert(s) with aggregate impact "
+        f"Nirvesta Sentinel is monitoring {len(sentinel.alerts)} live alert(s) with aggregate impact "
         f"{sentinel.aggregate_impact} and vulnerability score {sentinel.vulnerability_score}."
     )
 
@@ -457,21 +465,133 @@ def simulate_strategy(payload: StrategySimulationRequest) -> StrategySimulationR
     )
 
 
+def answer_strategy_what_if(payload: StrategyWhatIfRequest) -> StrategyWhatIfResponse:
+    strategy = simulate_strategy(
+        StrategySimulationRequest(
+            monthly_surplus=payload.monthly_surplus,
+            risk_mode=payload.risk_mode,
+            event={
+                "label": "Lifestyle Spend",
+                "amount": payload.expense,
+                "sip_pause_months": payload.pause_months,
+            }
+            if payload.expense > 0 or payload.pause_months > 0
+            else None,
+        )
+    )
+
+    detected_amount = _parse_financial_amount(payload.question) or payload.expense
+    question_lower = payload.question.lower()
+    monthly_boost = max(1000.0, round(payload.monthly_surplus * 0.2 / 500) * 500)
+    delay_months = _calculate_delay_months(payload.monthly_surplus, detected_amount, payload.pause_months, payload.goal_target_amount)
+    projected_date = _calculate_projected_date(
+        target_amount=payload.goal_target_amount,
+        base_year=payload.goal_target_year,
+        monthly_surplus=payload.monthly_surplus,
+        expense=detected_amount,
+        pause_months=payload.pause_months,
+    )
+    projected_goal_month = _format_month_year(projected_date)
+
+    fallback_answer = _build_strategy_what_if_fallback(
+        question_lower=question_lower,
+        goal_name=payload.goal_name,
+        monthly_boost=monthly_boost,
+        delay_months=delay_months,
+        detected_amount=detected_amount,
+        projected_goal_month=projected_goal_month,
+        strategy=strategy,
+    )
+
+    prompt = (
+        "You are a helpful wealth planning assistant. Answer the user's what-if question in 2 short paragraphs max. "
+        "Be concrete and numerical. Do not use markdown bullets.\n\n"
+        + json.dumps(
+            {
+                "question": payload.question,
+                "goal_name": payload.goal_name,
+                "goal_target_amount": payload.goal_target_amount,
+                "goal_target_year": payload.goal_target_year,
+                "monthly_surplus": payload.monthly_surplus,
+                "risk_mode": payload.risk_mode,
+                "expense": payload.expense,
+                "pause_months": payload.pause_months,
+                "delay_months": delay_months,
+                "monthly_boost_suggestion": monthly_boost,
+                "projected_goal_month": projected_goal_month,
+                "strategy_summary": strategy.summary,
+                "wealth_at_fifty": strategy.wealth_at_fifty,
+                "projected_retirement_age": strategy.projected_retirement_age,
+            },
+            ensure_ascii=True,
+        )
+    )
+    answer = _groq_text(prompt) or fallback_answer
+    summary = (
+        f"{payload.goal_name} is modeled around {projected_goal_month}. "
+        f"Current what-if impact: about {max(delay_months, 0)} month(s) of delay unless you add roughly {_format_inr(monthly_boost)}."
+    )
+    confidence_note = (
+        "This estimate is guidance based on your current contribution, target amount, and modeled market assumptions. "
+        "Use it as a planning scenario, not a guaranteed return."
+    )
+
+    return StrategyWhatIfResponse(
+        answer=answer,
+        summary=summary,
+        delay_months=delay_months,
+        monthly_boost_suggestion=monthly_boost,
+        projected_goal_month=projected_goal_month,
+        confidence_note=confidence_note,
+    )
+
+
 def get_market_recommendations() -> MarketEngineResponse:
     tracked_quotes = get_market_quotes().quotes
     indices = get_market_indices(["NIFTY 50", "NIFTY BANK", "NIFTY IT"]).indices
     nifty = next(index for index in indices if index.index == "NIFTY 50")
     if not tracked_quotes:
-        return MarketEngineResponse(sentiment="No data available", recommendations=[], projected_acceleration=[])
+        return MarketEngineResponse(
+            sentiment="No data available",
+            summary="No recommendations available because tracked market data could not be loaded.",
+            why_ai_is_used=[],
+            recommendations=[],
+            recommended_etfs=[],
+            projected_acceleration=[],
+        )
 
-    top_candidates = sorted(tracked_quotes, key=lambda item: item.percent_change, reverse=True)[: min(3, len(tracked_quotes))]
+    positions = {position.symbol: position for position in _get_portfolio_positions()}
+    total_value = sum(position.market_value for position in positions.values()) or 0
+    top_candidates = sorted(
+        tracked_quotes,
+        key=lambda item: _recommendation_score(item, positions.get(item.symbol)),
+        reverse=True,
+    )[: min(3, len(tracked_quotes))]
+
+    recommendations = [_build_recommendation(quote, positions.get(quote.symbol), total_value) for quote in top_candidates]
+    recommended_etfs = [
+        _build_recommendation(quote, positions.get(quote.symbol), total_value)
+        for quote in tracked_quotes
+        if _category_for_quote(quote) == "ETF"
+    ]
+    recommended_etfs = sorted(
+        recommended_etfs,
+        key=lambda item: (item.months_accelerated, item.percent_change),
+        reverse=True,
+    )[:3]
+    ai_summary = _summarize_market_recommendations(recommendations, nifty)
+    why_ai_is_used = [
+        "AI compresses live market, portfolio, and goal-fit signals into a short rationale.",
+        "Deterministic math still drives brokerage, exit-fee, and month-acceleration estimates.",
+        "Each recommendation explains why it fits now instead of only showing raw price momentum.",
+    ]
 
     return MarketEngineResponse(
         sentiment=f"NIFTY 50 {nifty.percent_change:+.2f}%",
-        recommendations=[
-            _quote_to_recommendation(quote, _category_for_quote(quote), "review_position")
-            for quote in top_candidates
-        ],
+        summary=ai_summary,
+        why_ai_is_used=why_ai_is_used,
+        recommendations=recommendations,
+        recommended_etfs=recommended_etfs,
         projected_acceleration=[
             OverviewStat(
                 label=index.index,
@@ -574,6 +694,113 @@ def get_auditor_report() -> AuditorResponse:
             ),
         ),
         holdings=holdings,
+    )
+
+
+def get_portfolio_rebalancer() -> RebalancerResponse:
+    positions = _get_portfolio_positions()
+    if not positions:
+        return RebalancerResponse(
+            summary="No portfolio data is available yet, so rebalancing ratios cannot be computed.",
+            current_mix={"equity": 0, "debt": 0, "gold": 0, "international": 0},
+            target_mix={"equity": 55, "debt": 20, "gold": 10, "international": 15},
+            ratios=[],
+            suggested_moves=[],
+        )
+
+    total_value = sum(position.market_value for position in positions) or 1
+    concentration_ratio = round((max(position.market_value for position in positions) / total_value) * 100)
+    etf_value = sum(position.market_value for position in positions if "BEES" in position.symbol or "ETF" in position.quote.company_name.upper())
+    gold_value = sum(position.market_value for position in positions if "GOLD" in position.symbol or "GOLD" in position.quote.company_name.upper())
+    average_volatility = round(sum(position.volatility_proxy for position in positions) / len(positions))
+    liquid_value = sum(position.market_value for position in positions if "BEES" in position.symbol or position.safe_to_sell)
+    current_mix = _current_allocation_mix(positions, total_value)
+    target_mix = {"equity": 55, "debt": 20, "gold": 10, "international": 15}
+    drift_equity = current_mix["equity"] - target_mix["equity"]
+    goal_alignment = max(20, 100 - abs(drift_equity) - max(0, concentration_ratio - 25))
+
+    ratios = [
+        RebalancerRatio(
+            name="Concentration Ratio",
+            value=f"{concentration_ratio}%",
+            meaning="Shows how much of the portfolio sits in the single largest holding.",
+            impact="Higher concentration increases the chance that one position dominates portfolio outcomes.",
+            suggested_action="Trim oversized positions if this goes beyond 25-30%.",
+        ),
+        RebalancerRatio(
+            name="Equity vs Stability",
+            value=f"{current_mix['equity']}% growth / {100 - current_mix['equity']}% stabilizers",
+            meaning="Compares growth assets against defensive sleeves like gold or other stabilizers.",
+            impact="Too much growth raises drawdown risk, while too little slows wealth milestones.",
+            suggested_action="Use the target mix as the rebalance anchor when drift exceeds 8-10%.",
+        ),
+        RebalancerRatio(
+            name="ETF Diversification",
+            value=f"{round((etf_value / total_value) * 100)}%",
+            meaning="Shows how much of your portfolio is already in diversified ETF wrappers.",
+            impact="Higher ETF share usually lowers single-stock risk and improves consistency.",
+            suggested_action="Increase ETF allocation when concentration and volatility both rise.",
+        ),
+        RebalancerRatio(
+            name="Gold / Hedge Sleeve",
+            value=f"{round((gold_value / total_value) * 100)}%",
+            meaning="Measures the size of your defensive hedge allocation.",
+            impact="This helps cushion shocks, but too much can drag long-term compounding.",
+            suggested_action="Keep gold near 8-12% unless you are intentionally de-risking.",
+        ),
+        RebalancerRatio(
+            name="Volatility Load",
+            value=f"{average_volatility}/100",
+            meaning="A proxy for how turbulent your holdings are based on 52-week trading ranges.",
+            impact="Higher volatility makes panic selling more likely and increases drawdown depth.",
+            suggested_action="Offset high-volatility names with index ETFs or lower-beta holdings.",
+        ),
+        RebalancerRatio(
+            name="Liquidity Ratio",
+            value=f"{round((liquid_value / total_value) * 100)}%",
+            meaning="Shows how much of the portfolio can be exited with relatively low friction.",
+            impact="A healthier liquidity ratio improves emergency readiness and reduces forced-selling stress.",
+            suggested_action="Maintain a liquid sleeve for near-term goals and unexpected needs.",
+        ),
+        RebalancerRatio(
+            name="Goal Alignment Ratio",
+            value=f"{goal_alignment}%",
+            meaning="Estimates how closely your current allocation matches a balanced long-term target.",
+            impact="Lower alignment means your portfolio may not be helping your key goals efficiently.",
+            suggested_action="Use rebalance moves to shift capital toward the sleeves that support your next milestone.",
+        ),
+    ]
+
+    suggested_moves = [
+        RebalancerMove(
+            title="Reduce the most concentrated sleeve",
+            why="This lowers dependence on one stock or sector and improves diversification resilience.",
+            expected_effect="Can reduce downside concentration risk and make portfolio outcomes smoother.",
+        ),
+        RebalancerMove(
+            title="Redirect fresh SIPs into diversified ETFs",
+            why="Fresh money is the least disruptive way to rebalance without triggering unnecessary exit costs.",
+            expected_effect="Improves ETF ratio, lowers volatility load, and can move major goals closer with less friction.",
+        ),
+        RebalancerMove(
+            title="Top up the hedge sleeve only if drift is severe",
+            why="Gold or defensive sleeves should stabilize the portfolio, not dominate long-term growth.",
+            expected_effect="Helps absorb shocks while preserving enough equity exposure for compounding.",
+        ),
+    ]
+
+    summary = (
+        f"Your portfolio is {concentration_ratio}% concentrated in its largest holding, with an estimated "
+        f"{current_mix['equity']}% equity mix and {round((etf_value / total_value) * 100)}% ETF exposure. "
+        "The best rebalance move is usually to redirect new contributions before selling."
+    )
+
+    return RebalancerResponse(
+        summary=summary,
+        current_mix=current_mix,
+        target_mix=target_mix,
+        ratios=ratios,
+        suggested_moves=suggested_moves,
     )
 
 
@@ -875,6 +1102,49 @@ def _quote_to_recommendation(quote: QuoteSnapshot, category: str, action: str) -
     )
 
 
+def _build_recommendation(
+    quote: QuoteSnapshot,
+    position: PortfolioPosition | None,
+    total_portfolio_value: float,
+) -> Recommendation:
+    category = _category_for_quote(quote)
+    planned_investment = max(5000.0, total_portfolio_value * (0.06 if total_portfolio_value else 0.0))
+    if category == "ETF":
+        planned_investment = max(4000.0, total_portfolio_value * 0.05 if total_portfolio_value else 0.0)
+
+    goal_name = _recommendation_goal_name(category, quote)
+    annual_return = _assumed_annual_return(quote, category)
+    months_accelerated = _estimate_goal_acceleration_months(goal_name, planned_investment, annual_return)
+    exit_fee = planned_investment * _exit_fee_rate_for_category(category)
+    brokerage = planned_investment * settings.estimated_brokerage_rate
+    net_goal_impact = max(planned_investment - brokerage - exit_fee, 0)
+    why_points = _recommendation_why_points(quote, category, months_accelerated, position)
+    ai_summary = _summarize_recommendation(quote, why_points, goal_name, months_accelerated, brokerage, exit_fee)
+    risk_flag = _risk_flag_for_quote(quote, position)
+
+    recommendation = _quote_to_recommendation(quote, category, "review_position")
+    recommendation.why_recommended_now = _why_recommended_now(quote, category, position, months_accelerated)
+    recommendation.why_invest = why_points[0]
+    recommendation.ai_summary = ai_summary
+    recommendation.why_ai_likes_it = why_points
+    recommendation.goal_name = goal_name
+    recommendation.months_accelerated = months_accelerated
+    recommendation.recommended_investment = _format_inr(planned_investment)
+    recommendation.estimated_brokerage = _format_inr(brokerage)
+    recommendation.estimated_exit_fee = _format_inr(exit_fee)
+    recommendation.net_goal_impact = (
+        f"{goal_name} could move closer by about {months_accelerated} month(s) after costs, based on a "
+        f"{_format_inr(net_goal_impact)} deployable amount."
+    )
+    recommendation.risk_flag = risk_flag
+    recommendation.action = "initiate_sip" if category == "ETF" else "build_position"
+    recommendation.thesis = (
+        f"{quote.company_name} at INR {quote.last_price:,.2f} is showing {quote.percent_change:+.2f}% momentum. "
+        f"Modeled deployment: {_format_inr(planned_investment)}."
+    )
+    return recommendation
+
+
 def _category_for_quote(quote: QuoteSnapshot) -> str:
     name = quote.company_name.upper()
     if "ETF" in name or "BEES" in quote.symbol:
@@ -882,6 +1152,263 @@ def _category_for_quote(quote: QuoteSnapshot) -> str:
     if quote.industry:
         return quote.industry
     return "Equity"
+
+
+def _current_allocation_mix(positions: list[PortfolioPosition], total_value: float) -> dict[str, int]:
+    buckets = {"equity": 0.0, "debt": 0.0, "gold": 0.0, "international": 0.0}
+    for position in positions:
+        label = f"{position.symbol} {position.quote.company_name}".upper()
+        if "GOLD" in label:
+            buckets["gold"] += position.market_value
+        elif "NASDAQ" in label or "INTERNATIONAL" in label:
+            buckets["international"] += position.market_value
+        else:
+            buckets["equity"] += position.market_value
+
+    return {
+        bucket: round((value / total_value) * 100) if total_value else 0
+        for bucket, value in buckets.items()
+    }
+
+
+def _recommendation_score(quote: QuoteSnapshot, position: PortfolioPosition | None) -> float:
+    momentum = quote.percent_change * 18
+    stability_bonus = max(0.0, 22 - abs(quote.percent_change) * 4)
+    diversification_bonus = 8.0 if position is None else max(0.0, 14 - position.volatility_proxy * 0.2)
+    etf_bonus = 10.0 if _category_for_quote(quote) == "ETF" else 0.0
+    return momentum + stability_bonus + diversification_bonus + etf_bonus
+
+
+def _recommendation_goal_name(category: str, quote: QuoteSnapshot) -> str:
+    if category == "ETF" and "GOLD" in quote.symbol:
+        return "Emergency Buffer"
+    if category == "ETF":
+        return "Retirement Corpus"
+    if quote.industry and "BANK" in quote.industry.upper():
+        return "Home Down Payment"
+    if quote.industry and "IT" in quote.industry.upper():
+        return "Freedom Ledger"
+    return "Wealth Growth"
+
+
+def _assumed_annual_return(quote: QuoteSnapshot, category: str) -> float:
+    base_return = 0.11 if category == "ETF" else 0.135
+    momentum_adjustment = max(min(quote.percent_change / 100, 0.025), -0.02)
+    return max(0.07, base_return + momentum_adjustment)
+
+
+def _estimate_goal_acceleration_months(goal_name: str, additional_investment: float, annual_return: float) -> int:
+    targets = {
+        "Retirement Corpus": 4_200_000.0,
+        "Home Down Payment": 2_800_000.0,
+        "Emergency Buffer": 900_000.0,
+        "Freedom Ledger": 5_000_000.0,
+        "Wealth Growth": 3_200_000.0,
+    }
+    target_amount = targets.get(goal_name, 3_000_000.0)
+    monthly_contribution = max(settings.recommendation_monthly_contribution, 1.0)
+    monthly_return = annual_return / 12
+    current_months = _months_to_goal(target_amount, monthly_contribution, monthly_return)
+    improved_months = _months_to_goal(target_amount, monthly_contribution + (additional_investment / 12), monthly_return)
+    return max(current_months - improved_months, 1)
+
+
+def _months_to_goal(target_amount: float, monthly_contribution: float, monthly_return: float) -> int:
+    if monthly_return <= 0:
+        return ceil(target_amount / monthly_contribution)
+    numerator = (target_amount * monthly_return) / monthly_contribution + 1
+    if numerator <= 1:
+        return 1
+    return max(1, ceil(log(numerator) / log(1 + monthly_return)))
+
+
+def _parse_financial_amount(text: str) -> float | None:
+    for token in text.replace(",", "").split():
+        normalized = token.lower()
+        if normalized.endswith("lakh"):
+            number = normalized.replace("lakh", "")
+            if number:
+                try:
+                    return float(number) * 100000
+                except ValueError:
+                    continue
+        if normalized.endswith("cr") or normalized.endswith("crore"):
+            number = normalized.replace("crore", "").replace("cr", "")
+            if number:
+                try:
+                    return float(number) * 10000000
+                except ValueError:
+                    continue
+    match = re.search(r"(\d+(?:\.\d+)?)", text.replace(",", ""))
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _calculate_delay_months(monthly_surplus: float, expense: float, pause_months: int, target_amount: float) -> int:
+    if expense <= 0 and pause_months <= 0:
+        return 0
+    effective_surplus = max(monthly_surplus, 1.0)
+    expense_delay = expense > 0 and ceil((expense + target_amount * 0.1) / effective_surplus / 2) or 0
+    return min(60, expense_delay + pause_months)
+
+
+def _calculate_projected_date(
+    *,
+    target_amount: float,
+    base_year: int,
+    monthly_surplus: float,
+    expense: float,
+    pause_months: int,
+) -> datetime:
+    if monthly_surplus <= 0:
+        return datetime(base_year, 1, 1, tzinfo=UTC)
+    monthly_capacity = max(1000.0, monthly_surplus * 0.72)
+    adjusted_target = max(0.0, target_amount + expense * 0.65)
+    months_needed = ceil(adjusted_target / monthly_capacity) + pause_months
+    projected = datetime.now(tz=UTC).replace(day=1)
+    year = projected.year + ((projected.month - 1 + months_needed) // 12)
+    month = ((projected.month - 1 + months_needed) % 12) + 1
+    return projected.replace(year=year, month=month)
+
+
+def _format_month_year(date: datetime) -> str:
+    return date.strftime("%b %Y")
+
+
+def _build_strategy_what_if_fallback(
+    *,
+    question_lower: str,
+    goal_name: str,
+    monthly_boost: float,
+    delay_months: int,
+    detected_amount: float,
+    projected_goal_month: str,
+    strategy: StrategySimulationResponse,
+) -> str:
+    if "pause" in question_lower or "stop sip" in question_lower:
+        return (
+            f"Pausing SIPs would likely push {goal_name} by about {max(delay_months, 1)} month(s), moving the target window "
+            f"toward {projected_goal_month}. Keeping even a reduced SIP active is the cleanest way to protect the goal timeline."
+        )
+    if "increase sip" in question_lower or "raise my sip" in question_lower or "salary hike" in question_lower:
+        return (
+            f"Adding around {_format_inr(monthly_boost)} to your monthly SIP should help pull {goal_name} closer and strengthen your "
+            f"long-term projection. Your current model still points to {strategy.wealth_at_fifty} by age 50."
+        )
+    if "spend" in question_lower or "expense" in question_lower:
+        return (
+            f"A spend of about {_format_inr(detected_amount)} would likely delay {goal_name} by roughly {max(delay_months, 1)} month(s), "
+            f"unless you offset it with a higher SIP or a shorter pause."
+        )
+    return (
+        f"At the current settings, {goal_name} is modeled around {projected_goal_month}. If you want to improve the timeline, "
+        f"the cleanest lever is to add around {_format_inr(monthly_boost)} to your monthly contribution."
+    )
+
+
+def _exit_fee_rate_for_category(category: str) -> float:
+    return settings.estimated_etf_exit_fee_rate if category == "ETF" else settings.estimated_equity_exit_fee_rate
+
+
+def _recommendation_why_points(
+    quote: QuoteSnapshot,
+    category: str,
+    months_accelerated: int,
+    position: PortfolioPosition | None,
+) -> list[str]:
+    points = [
+        f"It can bring your { _recommendation_goal_name(category, quote) } closer by about {months_accelerated} month(s) under current contribution assumptions.",
+        f"Estimated entry-plus-exit friction stays controlled because {category.lower()} costs are modeled separately from alpha potential.",
+    ]
+    if position is None:
+        points.insert(0, "It adds fresh diversification instead of increasing concentration in a current holding.")
+    else:
+        points.insert(0, f"It already exists in your basket, so averaging in can improve compounding efficiency without introducing a new risk bucket.")
+    return points[:3]
+
+
+def _risk_flag_for_quote(quote: QuoteSnapshot, position: PortfolioPosition | None) -> str:
+    if position and position.volatility_proxy >= 35:
+        return "High volatility sleeve"
+    if abs(quote.percent_change) >= 2.5:
+        return "Momentum is elevated today"
+    return "Risk appears manageable"
+
+
+def _why_recommended_now(
+    quote: QuoteSnapshot,
+    category: str,
+    position: PortfolioPosition | None,
+    months_accelerated: int,
+) -> str:
+    if category == "ETF":
+        if position is None:
+            return (
+                f"Recommended now because the ETF adds instant diversification and can bring a target goal closer by about "
+                f"{months_accelerated} month(s) with lower modeled exit friction."
+            )
+        return (
+            f"Recommended now because systematic buying into this ETF can smooth volatility in an existing sleeve and still "
+            f"save about {months_accelerated} month(s) on the goal timeline."
+        )
+    if quote.percent_change >= 1:
+        return (
+            f"Recommended now because momentum is constructive and the modeled contribution still advances the goal timeline by "
+            f"{months_accelerated} month(s)."
+        )
+    return (
+        f"Recommended now because the entry is relatively calmer while still improving goal velocity by about "
+        f"{months_accelerated} month(s)."
+    )
+
+
+def _summarize_market_recommendations(recommendations: list[Recommendation], nifty: IndexSnapshot) -> str:
+    fallback = (
+        f"NIFTY 50 is {nifty.percent_change:+.2f}% today. The engine is prioritizing ideas that improve diversification, "
+        "keep trading frictions visible, and move major goals closer."
+    )
+    if not recommendations:
+        return fallback
+    prompt = (
+        "Summarize these investment recommendations in under 55 words. Mention goal acceleration, fees, and why AI is used. "
+        "Return plain text only.\n\n"
+        + json.dumps([recommendation.model_dump() for recommendation in recommendations], ensure_ascii=True)
+    )
+    return _groq_text(prompt) or fallback
+
+
+def _summarize_recommendation(
+    quote: QuoteSnapshot,
+    why_points: list[str],
+    goal_name: str,
+    months_accelerated: int,
+    brokerage: float,
+    exit_fee: float,
+) -> str:
+    fallback = (
+        f"{quote.symbol} supports {goal_name} and may save about {months_accelerated} month(s). "
+        f"Estimated friction: {_format_inr(brokerage + exit_fee)}."
+    )
+    prompt = (
+        "Write a crisp recommendation summary in under 35 words for a wealth app card. Mention goal acceleration, "
+        "fees, and one reason to invest now. Plain text only.\n\n"
+        + json.dumps(
+            {
+                "symbol": quote.symbol,
+                "goal_name": goal_name,
+                "months_accelerated": months_accelerated,
+                "why_points": why_points,
+                "brokerage": _format_inr(brokerage),
+                "exit_fee": _format_inr(exit_fee),
+            },
+            ensure_ascii=True,
+        )
+    )
+    return _groq_text(prompt) or fallback
 
 
 def _get_index_by_name(name: str) -> IndexSnapshot:
@@ -995,6 +1522,48 @@ def _post_json(url: str, payload: dict[str, Any]) -> Any:
     if not raw.strip():
         return {"message": "n8n master_flow returned an empty response."}
     return json.loads(raw)
+
+
+def _groq_text(prompt: str) -> str | None:
+    if not settings.groq_api_key:
+        return None
+
+    request = Request(
+        f"{settings.groq_base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(
+            {
+                "model": settings.groq_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a concise financial UX writer. Follow formatting instructions exactly and avoid markdown.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.2,
+            }
+        ).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {settings.groq_api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+    choices = payload.get("choices", [])
+    if not choices:
+        return None
+    message = choices[0].get("message", {})
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    return None
 
 
 def _extract_summary(payload: Any) -> str | None:

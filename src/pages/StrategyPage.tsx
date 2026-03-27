@@ -27,6 +27,15 @@ type StrategySimulationResponse = {
   summary: string;
 };
 
+type StrategyWhatIfResponse = {
+  answer: string;
+  summary: string;
+  delay_months: number;
+  monthly_boost_suggestion: number;
+  projected_goal_month: string;
+  confidence_note: string;
+};
+
 type EditableGoal = {
   id: string;
   goal_name: string;
@@ -69,6 +78,7 @@ export function StrategyPage() {
   const [strategy, setStrategy] = useState<StrategySimulationResponse | null>(null);
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [strategyLoading, setStrategyLoading] = useState(true);
+  const [chatLoading, setChatLoading] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [goalSaveMessage, setGoalSaveMessage] = useState<string | null>(null);
   const [savingGoal, setSavingGoal] = useState(false);
@@ -165,33 +175,57 @@ export function StrategyPage() {
     [selectedGoal, monthlySurplus, expense],
   );
 
-  function submitScenario(question: string) {
+  async function submitScenario(question: string) {
     const trimmedQuestion = question.trim();
     if (!trimmedQuestion) {
       return;
     }
 
-    setMessages((current) => [
-      ...current,
-      { role: "user", text: trimmedQuestion },
-      {
-        role: "assistant",
-        text: buildStrategyResponse({
-          question: trimmedQuestion,
-          monthlySurplus,
-          expense,
-          pauseMonths,
-          strategy,
-          goal: selectedGoal,
-        }),
-      },
-    ]);
+    setMessages((current) => [...current, { role: "user", text: trimmedQuestion }]);
     setChatInput("");
+    setChatLoading(true);
+
+    try {
+      const response = await fetchJson<StrategyWhatIfResponse>(`${apiBaseUrl}/strategy/what-if`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: trimmedQuestion,
+          monthly_surplus: Math.max(monthlySurplus, 1),
+          risk_mode: riskMode,
+          expense,
+          pause_months: pauseMonths,
+          goal_name: selectedGoal.goal_name || "Primary Goal",
+          goal_target_amount: Number(selectedGoal.target_amount || 0),
+          goal_target_year: Number(selectedGoal.target_year || new Date().getFullYear() + 5),
+        }),
+      });
+
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          text: `${response.answer}\n\n${response.summary}`,
+        },
+      ]);
+    } catch {
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          text: "The what-if copilot could not be reached right now. Make sure the backend is running and your Groq configuration is available.",
+        },
+      ]);
+    } finally {
+      setChatLoading(false);
+    }
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    submitScenario(chatInput);
+    void submitScenario(chatInput);
   }
 
   function toStoredGoal(goal: EditableGoal): StoredStrategyGoal {
@@ -694,8 +728,9 @@ export function StrategyPage() {
                     <button
                       key={question}
                       type="button"
-                      onClick={() => submitScenario(question)}
-                      className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-[0.14em] text-on-surface-variant transition hover:border-tertiary/30 hover:text-white"
+                      onClick={() => void submitScenario(question)}
+                      disabled={chatLoading}
+                      className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left text-xs uppercase tracking-[0.14em] text-on-surface-variant transition hover:border-tertiary/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {question}
                     </button>
@@ -709,12 +744,14 @@ export function StrategyPage() {
                     onChange={(event) => setChatInput(event.target.value)}
                     placeholder="What if I increase my SIP, spend INR 10 lakhs, or retire earlier?"
                     className="w-full rounded-2xl border border-white/10 bg-surface-container-high py-4 pl-5 pr-20 text-sm text-white outline-none placeholder:text-neutral-600"
+                    disabled={chatLoading}
                   />
                   <button
                     type="submit"
-                    className="absolute right-2 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl bg-white text-on-primary transition hover:bg-tertiary"
+                    disabled={chatLoading || !chatInput.trim()}
+                    className="absolute right-2 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-xl bg-white text-on-primary transition hover:bg-tertiary disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    <MaterialIcon name="arrow_upward" className="text-lg" />
+                    <MaterialIcon name={chatLoading ? "hourglass_top" : "arrow_upward"} className="text-lg" />
                   </button>
                 </form>
               </div>

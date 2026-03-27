@@ -19,12 +19,16 @@ from .models import (
     MarketSnapshotResponse,
     MarketStatusResponse,
     OverviewResponse,
+    RebalancerResponse,
     SentinelResponse,
     StrategySimulationRequest,
     StrategySimulationResponse,
+    StrategyWhatIfRequest,
+    StrategyWhatIfResponse,
     UploadPortfolioResponse,
 )
 from .services import (
+    answer_strategy_what_if,
     analyze_with_master_flow,
     analyze_uploaded_portfolio,
     analyze_uploaded_portfolios,
@@ -38,6 +42,7 @@ from .services import (
     get_market_snapshot,
     get_market_status,
     get_overview,
+    get_portfolio_rebalancer,
     get_sentinel_alerts,
     respond_to_concierge,
     simulate_strategy,
@@ -121,6 +126,11 @@ def strategy_simulate(payload: StrategySimulationRequest) -> StrategySimulationR
     return simulate_strategy(payload)
 
 
+@router.post("/strategy/what-if", response_model=StrategyWhatIfResponse)
+def strategy_what_if(payload: StrategyWhatIfRequest) -> StrategyWhatIfResponse:
+    return answer_strategy_what_if(payload)
+
+
 @router.get("/market-engine/recommendations", response_model=MarketEngineResponse)
 def market_recommendations() -> MarketEngineResponse:
     return get_market_recommendations()
@@ -139,6 +149,11 @@ def alerts_news(focus_alert: str | None = Query(default=None, description="Optio
 @router.get("/auditor/report", response_model=AuditorResponse)
 def auditor_report() -> AuditorResponse:
     return get_auditor_report()
+
+
+@router.get("/portfolio/rebalancer", response_model=RebalancerResponse)
+def portfolio_rebalancer() -> RebalancerResponse:
+    return get_portfolio_rebalancer()
 
 
 @router.get("/command-center/briefing", response_model=CommandCenterResponse)

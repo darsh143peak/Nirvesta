@@ -126,6 +126,26 @@ class StrategySimulationResponse(BaseModel):
     summary: str
 
 
+class StrategyWhatIfRequest(BaseModel):
+    question: str = Field(min_length=1)
+    monthly_surplus: float = Field(gt=0)
+    risk_mode: Literal["conservative", "balanced", "aggressive"] = "balanced"
+    expense: float = Field(default=0, ge=0)
+    pause_months: int = Field(default=0, ge=0, le=24)
+    goal_name: str = Field(min_length=1)
+    goal_target_amount: float = Field(default=0, ge=0)
+    goal_target_year: int = Field(ge=2024)
+
+
+class StrategyWhatIfResponse(BaseModel):
+    answer: str
+    summary: str
+    delay_months: int
+    monthly_boost_suggestion: float
+    projected_goal_month: str
+    confidence_note: str
+
+
 class Recommendation(BaseModel):
     symbol: str
     category: str
@@ -134,11 +154,25 @@ class Recommendation(BaseModel):
     last_updated: str
     thesis: str
     action: str
+    why_recommended_now: str | None = None
+    why_invest: str | None = None
+    ai_summary: str | None = None
+    why_ai_likes_it: list[str] = Field(default_factory=list)
+    goal_name: str | None = None
+    months_accelerated: int = 0
+    recommended_investment: str | None = None
+    estimated_brokerage: str | None = None
+    estimated_exit_fee: str | None = None
+    net_goal_impact: str | None = None
+    risk_flag: str | None = None
 
 
 class MarketEngineResponse(BaseModel):
     sentiment: str
+    summary: str
+    why_ai_is_used: list[str] = Field(default_factory=list)
     recommendations: list[Recommendation]
+    recommended_etfs: list[Recommendation] = Field(default_factory=list)
     projected_acceleration: list[OverviewStat]
 
 
@@ -185,6 +219,28 @@ class AuditorResponse(BaseModel):
     annualized_risk_trend: list[int]
     recommendation: AuditRecommendation
     holdings: list[AuditHolding]
+
+
+class RebalancerRatio(BaseModel):
+    name: str
+    value: str
+    meaning: str
+    impact: str
+    suggested_action: str
+
+
+class RebalancerMove(BaseModel):
+    title: str
+    why: str
+    expected_effect: str
+
+
+class RebalancerResponse(BaseModel):
+    summary: str
+    current_mix: dict[str, int]
+    target_mix: dict[str, int]
+    ratios: list[RebalancerRatio]
+    suggested_moves: list[RebalancerMove]
 
 
 class CommandSignal(BaseModel):
